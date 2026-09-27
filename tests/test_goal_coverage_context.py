@@ -56,7 +56,13 @@ def test_context_preserves_goal_contract_and_correction_state_without_duplicate_
         context = build_context(project, package, settings, False, {}, evidence, feedback)
         assert context.count(INSTRUCTIONS) == 1
         state = json.loads(context[len(INSTRUCTIONS):])
-        assert state["plan"] == package.plan.model_dump(mode="json")
+        overview = state["plan"]["gaps"][0]
+        goal = package.plan.gaps[0]
+        assert overview["gap_id"] == goal.gap_id
+        assert overview["question"] == goal.question
+        assert overview["completion_criteria"] == goal.completion_criteria
+        assert overview["coverage_assessment"]["addressed"] == [False]
+        assert "rationale" not in overview["coverage_assessment"]
         assert state["project"]["research_scope"] == project.research_scope
         assert state["evidence_context"] == evidence
         assert state["previous_checkpoint_outcome"] == feedback

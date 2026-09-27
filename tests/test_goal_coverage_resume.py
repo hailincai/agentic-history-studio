@@ -29,7 +29,8 @@ def test_terminal_checkpoint_resume_preserves_assessment_and_no_progress_history
     provider = FakeProvider([deepcopy(checkpoint)] * 3)
     resumed = ResearchAgent(provider, FakeTools(), settings()).run(project, store)
     context = json.loads(provider.contexts[0][len(INSTRUCTIONS):])
-    assert context["plan"] == expected
+    from history_studio.research.knowledge import plan_overview
+    assert context["plan"] == plan_overview(first.plan)
     assert resumed.plan.model_dump(mode="json") == expected
     assert resumed.facts == first.facts
     assert resumed.progress.stop_reason == "no_progress_limit"
@@ -45,7 +46,7 @@ def test_terminal_checkpoint_resume_preserves_assessment_and_no_progress_history
 
 
 @pytest.mark.parametrize("status", ["COVERED", "RESEARCHED_UNRESOLVED"])
-def test_new_linked_research_after_resume_advances_coverage(tmp_path, status):
+def test_new_linked_research_after_resume_advances_coverage(tmp_path, status, monkeypatch):
     project, store = setup_run(tmp_path)
     initial = update(complete=False)
     initial.arguments["plan"]["gaps"].append(dict(gap_id="G-2", question="Which competing date is recorded?",
@@ -62,7 +63,26 @@ def test_new_linked_research_after_resume_advances_coverage(tmp_path, status):
     fact.update(fact_id="RF-2", claim="A competing date is recorded")
     # A new fact needs an authorized current read, even though the first goal is carried forward.
     provider = FakeProvider([calls()[1], proposal, RuntimeError("offline stop after checkpoint")])
+    from history_studio.research import agent as agent_module
+    from history_studio.research.source_store import SourceStore
+    original_resolve = agent_module.resolve_selection
+    resolved = []
+    def inspect_authorization(source_id, span_id, reads, seen, location):
+        canonical = reads[source_id]
+        assert span_id in canonical.spans
+        assert seen[span_id] == (source_id, canonical.source_version)
+        assert SourceStore(store.project_dir / ".runtime" / "sources").get(
+            source_id, canonical.source_version) == canonical
+        evidence = original_resolve(source_id, span_id, reads, seen, location)
+        resolved.append(evidence)
+        return evidence
+    monkeypatch.setattr(agent_module, "resolve_selection", inspect_authorization)
     resumed = ResearchAgent(provider, FakeTools(), settings()).run(project, store)
+    assert len(resolved) == 1
+    visible = json.loads(provider.contexts[1][len(INSTRUCTIONS):])["evidence_context"]["latest_read_source"]
+    assert visible["source_id"] == resolved[0].source_id
+    assert visible["source_version"] == resolved[0].source_version
+    assert {"span_id": resolved[0].span_id, "text": resolved[0].excerpt} in visible["spans"]
     assert resumed.plan.gaps[0] == first.plan.gaps[0]
     assert resumed.plan.gaps[1].status == status
     assert len(resumed.facts) == 2
@@ -106,3 +126,25 @@ def test_legacy_load_and_resume_do_not_invent_coverage_or_grant_completion(tmp_p
         assert resumed.plan == loaded.plan
     assert path.read_bytes() == original_bytes
 
+
+
+
+def test_stored_source_does_not_authorize_new_fact_after_resume(tmp_path):
+    from history_studio.research.diagnostics import ValidationDiagnostic
+    from history_studio.research.source_store import SourceStore
+    from history_studio.storage import ArtifactStore
+    project, store = setup_run(tmp_path)
+    first = ResearchAgent(FakeProvider(calls(complete=False) + [RuntimeError("offline interruption")]),
+                          FakeTools(), settings()).run(project, store)
+    prior = first.facts[0].evidence[0]
+    canonical = SourceStore(store.project_dir / ".runtime" / "sources").get(prior.source_id, prior.source_version)
+    assert prior.span_id in canonical.spans
+    proposal = update(complete=False)
+    proposal.arguments["facts"][0].update(fact_id="RF-2", claim="A competing date is recorded")
+    # Deliberately omit the current read; stored material must not grant authorization.
+    provider = FakeProvider([proposal])
+    resumed = ResearchAgent(provider, FakeTools(), settings(max_turns_per_iteration=1)).run(project, store)
+    assert resumed.facts == first.facts
+    diagnostic = ArtifactStore(store.project_dir / ".runtime").load_latest("diagnostics", ValidationDiagnostic)
+    assert diagnostic.errors[0].type == "source_not_read"
+    assert diagnostic.errors[0].span_selection["source_was_read"] is False

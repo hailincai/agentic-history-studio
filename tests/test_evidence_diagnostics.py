@@ -105,6 +105,8 @@ def test_mocked_sdk_checkpoint_arguments_reach_validator_unchanged(tmp_path, mon
     requests = []
     validator_inputs = []
     project, store = setup_run(tmp_path)
+    # Retrieval is lexical: align the pre-plan scope with this Chinese transport fixture.
+    project.research_scope = "出生與遷居"
 
     class PageTools(FakeTools):
         def read_source(self, source, max_chars):

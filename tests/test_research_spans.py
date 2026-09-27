@@ -124,12 +124,12 @@ def test_changed_read_rejects_old_span_then_corrects_from_retained_observation(t
     assert retained["spans"][0]["span_id"] == evidence.span_id
 
 
-def test_observation_budget_bounds_spans_and_marks_truncation(tmp_path):
+def test_observation_budget_selects_spans_without_truncating_source(tmp_path):
     project, store = setup_run(tmp_path)
     class LongTools(FakeTools):
         def read_source(self, source, max_chars):
             result = super().read_source(source, max_chars)
-            result.text = "A sentence with evidence. " * 300
+            result.text = "The subject has evidence. " * 300
             return result
     provider = FakeProvider(calls())
     original = provider.decide
@@ -137,7 +137,9 @@ def test_observation_budget_bounds_spans_and_marks_truncation(tmp_path):
     def choose_visible(context, observation, max_output_tokens):
         if provider.calls == 2:
             page = json.loads(observation[1])
-            assert page["truncated"] is True
+            assert page["truncated"] is False
+            assert page["retrieved_subset"] is True
+            assert page["source_version"] == make_spans(SOURCE.source_id, "The subject has evidence. " * 300).source_version
             assert "text" not in page  # Avoid a duplicate page alongside span text.
             assert len(observation[1]) + len(json.dumps(observation[0].model_dump(), ensure_ascii=False)) <= 3000
             selected.update(page)

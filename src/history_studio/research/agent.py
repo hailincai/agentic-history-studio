@@ -16,7 +16,9 @@ from .spans import make_spans, resolve_selection, SourceSpans
 from .progress import completion_status, progress_marks, progress_signals
 from .boundaries import ResearchProvider, ResearchTools, ToolCall, ToolObservation
 from .config import ResearchSettings
-from .context import ContextLimitError, build_context
+from .context import ContextLimitError, build_retrieval_context
+from .source_store import SourceStore
+from .knowledge import KnowledgeRetriever
 from .diagnostics import (
     ArtifactValidationError, ValidationDiagnostic, RequestDiagnostic, diagnostic_lines,
     validation_diagnostic, request_diagnostic,
@@ -34,11 +36,13 @@ class ResearchAgent:
     """
 
     def __init__(self, provider: ResearchProvider, tools: ResearchTools, settings: ResearchSettings,
-                 emit: Callable[[str], None] | None = None) -> None:
+                 emit: Callable[[str], None] | None = None, *,
+                 knowledge_retriever: KnowledgeRetriever | None = None) -> None:
         self.provider = provider
         self.tools = tools
         self.settings = settings
         self.emit = emit or (lambda event: None)
+        self.knowledge_retriever = knowledge_retriever
 
     def run(self, project: ProjectConfig, store: ArtifactStore,
             runtime_configuration: BaseModel | None = None) -> ResearchPackage:
@@ -114,6 +118,7 @@ class ResearchAgent:
         ledger.progress_seen = sorted(set(ledger.progress_seen) | progress_marks(package))
         ledger.persist(usage_path)
         hard_budget = min(self.settings.hard_budget_usd, project.budget_usd)
+        source_store = SourceStore(runtime / "sources")
         observation: tuple[ToolCall, str] | None = None
         while True:
             operation = "guardrails"
@@ -128,13 +133,20 @@ class ResearchAgent:
                                                     stop_reason=package.progress.stop_reason)
                 self.emit(f"Research iteration {ledger.iterations_started}")
                 passages: dict[str, str] = {}
-                latest_read: dict[str, object] | None = None
+                latest_read: SourceSpans | None = None
                 read_observations: dict[str, tuple[str, bool]] = {}
                 span_reads: dict[str, SourceSpans] = {}
                 seen_spans: dict[str, tuple[str, str]] = {}
                 for turn in range(self.settings.max_turns_per_iteration):
                     soft = ledger.committed_budget_usd >= self.settings.soft_budget_usd
-                    context = build_context(project, package, self.settings, soft, {
+                    read_envelope = None
+                    span_budget = None
+                    if observation and observation[0].name == "read_source":
+                        read_envelope = json.loads(observation[1])
+                        span_budget = (self.settings.max_observation_chars
+                            - len(json.dumps(observation[0].model_dump(), ensure_ascii=False))
+                            - len(json.dumps(read_envelope, ensure_ascii=False, separators=(",", ":"))) + 1)
+                    context, evidence_context = build_retrieval_context(project, package, self.settings, soft, {
                         "iterations": self.settings.max_iterations - ledger.iterations_started,
                         "searches": self.settings.max_searches - ledger.search_calls,
                         "source_reads": self.settings.max_source_reads - ledger.source_reads,
@@ -142,8 +154,12 @@ class ResearchAgent:
                         "reserved_budget_remaining_usd": max(0, hard_budget - ledger.committed_budget_usd),
                         "completion_min_facts": self.settings.min_facts,
                         "completion_min_sources": self.settings.min_sources,
-                    }, evidence_context={"read_source_ids": list(passages), "latest_read_source": latest_read},
-                        previous_outcome=ledger.last_checkpoint_outcome)
+                    }, list(passages), latest_read, previous_outcome=ledger.last_checkpoint_outcome,
+                        observation_span_budget=span_budget, knowledge_retriever=self.knowledge_retriever)
+                    if read_envelope is not None:
+                        observation = (observation[0], json.dumps(
+                            {**read_envelope, **evidence_context["latest_read_source"]},
+                            ensure_ascii=False, separators=(",", ":")))
                     if soft:
                         self.emit("Soft budget reached; model asked to consolidate")
                     if observation:
@@ -266,25 +282,18 @@ class ResearchAgent:
                     result = self._merge_sources(package, result)
                     if result.kind == "source" and result.source_id:
                         read = make_spans(result.source_id, result.text, result.truncated)
-                        # Include span metadata within the existing observation allocation.
-                        # Reduce retained text only at span boundaries; advertise truncation.
-                        while True:
-                            visible = read.observation()
-                            output = json.dumps({"kind": "source", "sources": [s.model_dump(mode="json")
-                                for s in result.sources], **visible}, ensure_ascii=False)
-                            size = len(json.dumps(call.model_dump(), ensure_ascii=False)) + len(output)
-                            if size <= self.settings.max_observation_chars:
-                                break
-                            if len(read.spans) <= 1:
-                                raise LimitReached("observation_context_limit")
-                            end = list(read.spans.values())[-2][1]
-                            read = make_spans(result.source_id, read.text[:end], True)
+                        # Persist the complete fetched representation before retrieval.
+                        # Context selection never truncates text or regenerates span IDs.
+                        operation = "source_persistence"
+                        source_store.put(read)
+                        output = json.dumps({"kind": "source", "sources": [
+                            s.model_dump(mode="json") for s in result.sources]}, ensure_ascii=False)
                         span_reads[result.source_id] = read
                         for span_id in read.spans:
                             seen_spans[span_id] = (read.source_id, read.source_version)
                         passages[result.source_id] = read.text
                         read_observations[result.source_id] = (read.text, read.truncated)
-                        latest_read = visible
+                        latest_read = read
                     else:
                         output = result.model_dump_json(exclude={"usage"})
                     observation = (call, output)
