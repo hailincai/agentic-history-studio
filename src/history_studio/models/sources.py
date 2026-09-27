@@ -16,6 +16,10 @@ class SourceType(StrEnum):
     NEWS = "NEWS"
     WIKIPEDIA = "WIKIPEDIA"
     OTHER = "OTHER"
+    INSTITUTIONAL = "INSTITUTIONAL"
+    GENERAL_WEBSITE = "GENERAL_WEBSITE"
+    USER_GENERATED = "USER_GENERATED"
+    UNKNOWN = "UNKNOWN"
 
 
 class SourceReference(Contract):
@@ -23,6 +27,7 @@ class SourceReference(Contract):
     title: Text
     url: HttpUrl
     source_type: SourceType
+    domain: Text | None = None
     publisher: Text | None = None
     author: Text | None = None
     published_date: date | None = None

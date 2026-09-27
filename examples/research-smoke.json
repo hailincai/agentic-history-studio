@@ -1,0 +1,17 @@
+{
+  "research": {
+    "max_iterations": 5,
+    "max_searches": 8,
+    "max_source_reads": 12,
+    "soft_budget_usd": 0.20,
+    "hard_budget_usd": 0.35,
+    "min_facts": 2,
+    "min_sources": 2
+  },
+  "provider": {
+    "model": "gpt-4.1-mini",
+    "pricing_model": "gpt-4.1-mini",
+    "input_usd_per_million": 0.40,
+    "output_usd_per_million": 1.60
+  }
+}

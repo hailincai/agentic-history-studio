@@ -22,3 +22,6 @@ htmlcov/
 Thumbs.db
 
 .pending-*.tmp
+
+# Local project runtime artifacts
+projects/

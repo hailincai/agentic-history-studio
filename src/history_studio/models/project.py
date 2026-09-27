@@ -5,6 +5,7 @@ from .base import Contract, Identifier, Nonnegative, PositiveSeconds, Text
 
 class ProjectConfig(Contract):
     project_id: Identifier
+    research_scope: Text | None = None
     topic: Text
     language: Text = "zh-CN"
     target_duration_minutes: PositiveSeconds = 5
