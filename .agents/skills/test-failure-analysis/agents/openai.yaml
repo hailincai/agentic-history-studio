@@ -1,0 +1,4 @@
+interface:
+  display_name: "Test Failure Analysis"
+  short_description: "Diagnose project test failures and verify scoped fixes"
+  default_prompt: "Use $test-failure-analysis to investigate these failing tests, identify the root cause, and apply the smallest fix within the authorized scope."
