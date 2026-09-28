@@ -33,6 +33,7 @@ class ValidationDiagnostic(Contract):
 
 DOMAIN_MESSAGES = {
     "source_not_read": "Read the selected source in this iteration before selecting evidence",
+    "unknown_source": "Not a known source_id. Do not construct source IDs from evidence reference IDs; use the canonical source_id associated with the selected evidence/span",
     "span_not_found": "Span ID does not exist in the current read source representation",
     "span_source_mismatch": "Span belongs to a different source_id",
     "stale_source_span": "Span belongs to an earlier source representation; select a current span",

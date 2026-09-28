@@ -193,7 +193,8 @@ class ResearchAgent:
                                     prior = accepted.get((selection.source_id, selection.span_id))
                                     evidence = (prior.model_copy(deep=True) if prior is not None else
                                         resolve_selection(selection.source_id, selection.span_id, span_reads,
-                                            seen_spans, ["facts", fact_index, "evidence", index, "span_id"]))
+                                            seen_spans, ["facts", fact_index, "evidence", index, "span_id"],
+                                            known_source_ids={s.source_id for s in package.sources}))
                                     data["evidence"].append(evidence)
                                 facts.append(data)
                             update = ResearchUpdate(plan=proposal.plan, facts=facts,

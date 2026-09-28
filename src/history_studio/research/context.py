@@ -39,27 +39,25 @@ historical_time preserving original expressions and optional year bounds. Use ev
 provenance; source metadata belongs in the source table.
 research_confidence is unverified research confidence.
 Preserve competing claims as separate facts sharing dispute_group_id; do not adjudicate them.
-Do not invent metadata, excerpts, sources or IDs. Use returned source_id. Read before citing.
 At least once per iteration call checkpoint_research with the complete evolving plan, newly
 collected/updated facts, and CONTINUE or COMPLETE. Keep existing gap IDs, questions and critical
 flags; update criteria and assessments as research develops.
-If checkpoint_research returns validation_error, the update was rejected and no facts or plan
-changes were accepted. Correct the listed fields and resubmit within the remaining turn/budget
-limits. Select evidence_context.latest_read_source.spans when available; feedback does not
-remove those spans. Read again only if needed, and then use the newly returned IDs.
+validation_error rejects the entire update. Correct listed fields within remaining limits.
+Feedback retains evidence_context.latest_read_source.spans; reread only if needed, using new IDs.
 evidence_context.read_source_ids lists successful reads in this iteration, not discoveries.
-Working memory is a partial projection, not the complete artifact. knowledge.facts use
-context-only evidence_ids into knowledge.evidence; use that table's source_id/span_id for tools,
-never submit evidence_ids. knowledge.sources is a bounded discovery catalog. Unshown facts
-remain accepted. Plan assessment addressed flags align with completion_criteria; counts are
-summaries, not replacement fact IDs or full tool assessments.
-Unchanged facts may be omitted. When repeating accepted evidence on the same existing fact,
-reuse its source_id/span_id; Python carries the persisted record forward without rereading.
-New or changed evidence selections require spans from a current-iteration read. Never supply
-excerpt text or source_version overrides; those fields belong to Python and the accepted artifact.
+knowledge_view is a retrieved subset; knowledge_totals counts the complete ResearchPackage.
+Never infer global absence from omitted facts/evidence; global plan/coverage is authoritative.
+knowledge.facts.evidence_ids reference E- keys in knowledge.evidence, not source IDs.
+NEVER replace an E- prefix with SRC-. Copy the table's canonical source_id (SRC-) and span_id
+(SPAN-); never submit E- keys. knowledge.sources is a bounded discovery catalog.
+Plan addressed flags align with completion_criteria; counts are not fact IDs or assessments.
+Omit unchanged facts or reuse accepted same-fact source_id/span_id for immutable carry-forward
+without rereading. New/changed selections require a current-iteration read. Never override
+excerpt or source_version; Python owns these fields.
 Use COMPLETE only when coverage is sufficient, not merely when a fact count is met. Unresolved
 critical gaps block COMPLETE unless validly RESEARCHED_UNRESOLVED with the required assessment.
-If budget is low, consolidate and checkpoint promptly.
+Use consolidation.priority when present. Available material is not proof of support:
+you decide whether to search, read, or checkpoint. No action is forced.
 coverage_status reports deterministic completion shortfalls, including distinct cited sources
 (not discovered sources). If checkpoint feedback reports no_progress, choose an action that
 adds evidence or advances remaining coverage, or COMPLETE only if all criteria are satisfied.
@@ -87,6 +85,7 @@ def build_context(project: ProjectConfig, package: ResearchPackage, settings: Re
         "plan": plan_overview(package.plan),
         "knowledge": empty_knowledge(),
         "knowledge_totals": {"facts": len(package.facts), "sources": len(package.sources)},
+        "knowledge_view": {"is_partial": True, "selected_fact_count": len(package.facts)},
         "iteration": package.progress.iterations,
         "last_condition": package.progress.stop_reason,
         "soft_budget_reached": soft_budget_reached,
@@ -95,6 +94,16 @@ def build_context(project: ProjectConfig, package: ResearchPackage, settings: Re
         "coverage_status": completion_status(package, settings),
         "previous_checkpoint_outcome": feedback,
     }
+    if soft_budget_reached:
+        evidence = evidence_context or {}
+        read_ids = evidence.get("read_source_ids", [])
+        state["consolidation"] = {
+            "blockers_from": "coverage_status",
+            "current_read_source_id": (evidence.get("latest_read_source") or {}).get(
+                "source_id", read_ids[-1] if read_ids else None),
+            "material_available": bool((evidence.get("latest_read_source") or {}).get("spans")),
+            "priority": "Evaluate already-read material against remaining blockers before further exploration when appropriate.",
+        }
     baseline = len(INSTRUCTIONS) + 1 + serialized_size(state)
     allowance = settings.max_context_chars - settings.max_observation_chars
     if baseline > allowance:
@@ -110,6 +119,7 @@ def build_context(project: ProjectConfig, package: ResearchPackage, settings: Re
             if serialized_size(projection) > available:
                 raise ContextLimitError("structured_context_limit")
             state["knowledge"] = projection
+    state["knowledge_view"]["selected_fact_count"] = len(state["knowledge"]["facts"])
     result = INSTRUCTIONS + "\n" + json.dumps(state, ensure_ascii=False, separators=(",", ":"))
     if len(result) > settings.max_context_chars - settings.max_observation_chars:
         raise ContextLimitError("structured_context_limit")

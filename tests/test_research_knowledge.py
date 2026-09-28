@@ -45,6 +45,75 @@ def decode(context):
     return json.loads(context[len(INSTRUCTIONS):])
 
 
+def test_partial_view_counts_and_soft_consolidation_preserve_package():
+    package = package_with_facts(6)
+    for fact in package.facts:
+        fact.evidence = deepcopy(package.facts[0].evidence)
+    before = package.model_dump_json()
+    class ThreeFacts:
+        def retrieve(self, query, facts, sources, budget_chars):
+            return {"facts": [{"fact_id": f.fact_id} for f in facts[:3]],
+                    "evidence": {}, "sources": []}
+    canonical = make_spans("S1", "Childhood education records survive.")
+    for soft in (False, True):
+        context = build_context(project_for(package), package, settings(min_sources=2), soft, {},
+            {"read_source_ids": ["S1"], "latest_read_source": canonical.observation()},
+            knowledge_retriever=ThreeFacts())
+        state = decode(context)
+        assert state["knowledge_view"] == {"is_partial": True, "selected_fact_count": 3}
+        assert state["knowledge_totals"]["facts"] == 8
+        assert len(context) <= settings().max_context_chars - settings().max_observation_chars
+        if soft:
+            summary = state["consolidation"]
+            blockers = state[summary["blockers_from"]]
+            assert blockers["missing_cited_sources"] == 1
+            assert blockers["unresolved_critical_gaps"] == ["G1"]
+            assert summary["current_read_source_id"] == "S1"
+            assert summary["material_available"] is True
+            assert "when appropriate" in summary["priority"]
+            assert serialized_size(summary) < 350
+        else:
+            assert "consolidation" not in state
+    assert package.model_dump_json() == before
+    assert "Never infer global absence" in INSTRUCTIONS
+    assert "No action is forced" in INSTRUCTIONS
+    from history_studio.research.actions import action_contracts
+    assert {"search_web", "read_source", "checkpoint_research"} <= action_contracts().keys()
+
+
+def test_evidence_key_cannot_be_converted_into_source_identity():
+    from history_studio.research.spans import resolve_selection
+    from history_studio.research.diagnostics import ArtifactValidationError
+    package = package_with_facts()
+    package.sources[0].source_id = "SRC-542c8d22c6f8209b7b68"
+    canonical = make_spans(package.sources[0].source_id, "Childhood education records survive.")
+    for fact in package.facts:
+        fact.evidence[0].source_id = canonical.source_id
+        fact.evidence[0].source_version = canonical.source_version
+        fact.evidence[0].span_id = next(iter(canonical.spans))
+    state = decode(build_context(project_for(package), package, settings(), False, {}))
+    key, evidence = next(iter(state["knowledge"]["evidence"].items()))
+    assert key.startswith("E-")
+    assert evidence["source_id"] == canonical.source_id
+    assert evidence["span_id"] == next(iter(canonical.spans))
+    invented = "SRC-" + key.removeprefix("E-")
+    reads = {canonical.source_id: canonical}
+    with pytest.raises(ArtifactValidationError) as caught:
+        resolve_selection(invented, evidence["span_id"], reads, {}, ["span_id"],
+                          known_source_ids={canonical.source_id})
+    assert caught.value.issue.type == "unknown_source"
+    assert caught.value.issue.span_selection["source_id"] == invented
+    assert "evidence reference IDs" in caught.value.issue.message
+    assert set(reads) == {canonical.source_id}
+    with pytest.raises(ArtifactValidationError) as caught:
+        resolve_selection(canonical.source_id, evidence["span_id"], {}, {}, ["span_id"],
+                          known_source_ids={canonical.source_id})
+    assert caught.value.issue.type == "source_not_read"
+    assert resolve_selection(canonical.source_id, evidence["span_id"], reads, {}, [],
+        known_source_ids={canonical.source_id}).excerpt == canonical.text
+    assert "NEVER replace an E- prefix with SRC-" in INSTRUCTIONS
+
+
 def test_facts_rank_before_linked_evidence_and_deduplicate_without_mutation():
     package = package_with_facts(8)
     # Lexically relevant evidence on an unrelated fact must not make that fact relevant.

@@ -28,7 +28,7 @@ def test_unchanged_evidence_survives_next_iteration_without_read(tmp_path):
 
 @pytest.mark.parametrize("change, code", [
     ({"span_id": "SPAN-modified"}, "source_not_read"),
-    ({"source_id": "SRC-other"}, "source_not_read"),
+    ({"source_id": "SRC-other"}, "unknown_source"),
     ({"excerpt": "manufactured"}, "extra_forbidden"),
     ({"source_version": "VER-modified"}, "extra_forbidden"),
 ])

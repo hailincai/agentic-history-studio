@@ -53,12 +53,15 @@ def make_spans(source_id: str, text: str, truncated: bool = False) -> SourceSpan
 
 
 def resolve_selection(source_id: str, span_id: str, reads: dict[str, SourceSpans],
-                      seen: dict[str, tuple[str, str]], location: list) -> EvidenceReference:
+                      seen: dict[str, tuple[str, str]], location: list, *,
+                      known_source_ids: set[str] | None = None) -> EvidenceReference:
     from .diagnostics import ArtifactValidationError
     code = None
     read = reads.get(source_id)
     owner = seen.get(span_id)
-    if read is None:
+    if known_source_ids is not None and source_id not in known_source_ids:
+        code = "unknown_source"
+    elif read is None:
         code = "source_not_read"
     elif owner is not None and owner[0] != source_id:
         code = "span_source_mismatch"
