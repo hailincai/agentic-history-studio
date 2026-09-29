@@ -67,13 +67,14 @@ def test_new_linked_research_after_resume_advances_coverage(tmp_path, status, mo
     from history_studio.research.source_store import SourceStore
     original_resolve = agent_module.resolve_selection
     resolved = []
-    def inspect_authorization(source_id, span_id, reads, seen, location):
+    def inspect_authorization(source_id, span_id, reads, seen, location, *, known_source_ids=None):
         canonical = reads[source_id]
         assert span_id in canonical.spans
         assert seen[span_id] == (source_id, canonical.source_version)
         assert SourceStore(store.project_dir / ".runtime" / "sources").get(
             source_id, canonical.source_version) == canonical
-        evidence = original_resolve(source_id, span_id, reads, seen, location)
+        evidence = original_resolve(source_id, span_id, reads, seen, location,
+                                    known_source_ids=known_source_ids)
         resolved.append(evidence)
         return evidence
     monkeypatch.setattr(agent_module, "resolve_selection", inspect_authorization)
