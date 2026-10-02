@@ -52,7 +52,7 @@ def test_preparation_requires_only_context_and_never_executes_provider(monkeypat
     detached = VerificationContext.model_validate_json(context.model_dump_json())
     checker = FactChecker(detached)
     assert decode(checker.prepare())["target_fact"]["fact_id"] == "RF-target"
-    assert not hasattr(checker, "provider") and not hasattr(checker, "tools")
+    assert not hasattr(checker, "provider") and checker.tools is None
     assert all(not hasattr(checker, method) for method in ("run", "verify", "complete"))
 
 
