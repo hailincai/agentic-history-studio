@@ -2,16 +2,9 @@ from typing import Any, Literal, Protocol
 
 from pydantic import Field
 
-from history_studio.models.base import Contract, Nonnegative, Text
+from history_studio.models.base import Contract, Text
+from history_studio.model_io import Usage
 from history_studio.models.sources import SourceReference
-
-
-class Usage(Contract):
-    model: str | None = None
-    input_tokens: int | None = Field(default=None, ge=0)
-    output_tokens: int | None = Field(default=None, ge=0)
-    estimated_model_cost_usd: Nonnegative | None = None
-    estimated_tool_cost_usd: Nonnegative | None = None
 
 
 class ToolCall(Contract):

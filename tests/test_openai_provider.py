@@ -132,7 +132,7 @@ def test_missing_usage_stays_unknown_and_reservation_covers_schema() -> None:
 
 @pytest.mark.parametrize("status, output", [("incomplete", []), ("completed", [])])
 def test_malformed_or_incomplete_response_fails_closed(status, output) -> None:
-    raw = SimpleNamespace(status=status, output=output)
+    raw = SimpleNamespace(status=status, output=output, model="gpt-4.1-mini", usage=None)
     client = SimpleNamespace(responses=SimpleNamespace(create=lambda **kwargs: raw))
     with pytest.raises(RuntimeError):
         OpenAIResearchProvider(client, OpenAIConfiguration()).decide("context", None, 1000)
