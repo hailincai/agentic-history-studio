@@ -25,15 +25,21 @@ DISPUTED means credible competing support and contradiction remain unresolved.
 REJECTED means independent evidence materially contradicts the core claim, making it unsustainable.
 UNVERIFIED means adequate claim-specific investigation leaves insufficient independent evidence.
 Insufficient evidence is not REJECTED.
-This preparation stage performs no investigation and requests no VerificationResult or verdict.
+Preparation performs no investigation. A decision turn requests only a possible next action,
+not a VerificationResult or verdict. A requested tool call does not execute or accept evidence.
 """
 
 
 def build_context(context: VerificationContext) -> str:
     """Serialize only the validated one-claim input, without creating verification evidence."""
+    return INSTRUCTIONS + "\n" + serialize_context(context)
+
+
+def serialize_context(context: VerificationContext) -> str:
+    """Share the structured input between preparation and the separate provider input field."""
     if not isinstance(context, VerificationContext):
         raise TypeError("Fact Checker preparation requires one VerificationContext")
     # Recheck mutable nested input without changing the supplied context.
     validated = VerificationContext.model_validate(context.model_dump(mode="json"))
-    return INSTRUCTIONS + "\n" + json.dumps(validated.model_dump(mode="json"),
+    return json.dumps(validated.model_dump(mode="json"),
         ensure_ascii=False, separators=(",", ":"))

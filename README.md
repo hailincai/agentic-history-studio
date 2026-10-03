@@ -2,7 +2,7 @@
 
 Agentic History Studio is an AI engineering project for source-grounded historical documentaries with explicit human review. The planned first documentary is a five-minute Chinese film about Li Bai (李白).
 
-**Under active development. Phase 1 infrastructure and Phase 2 autonomous research are implemented.** Research uses the official OpenAI Python SDK and Responses API. Fact checking, RAG, storytelling, and media production are future phases. The normal test suite is offline and free; the `research` command makes paid API calls.
+**Under active development. Phase 1 infrastructure and Phase 2 autonomous research are implemented.** Phase 3 provides verification contracts, claim-bounded context, and a single Fact Checker model decision; autonomous verification and verdict submission remain future work. Research uses the official OpenAI Python SDK and Responses API. The normal test suite is offline and free; the `research` command makes paid API calls.
 
 ## Research Agent responsibility
 
@@ -17,7 +17,9 @@ flowchart TD
     C[ProjectConfig and optional research_scope] --> A[ResearchAgent: explicit bounded loop]
     A --> X[Bounded context: current plan, facts, source metadata]
     X --> P[ResearchProvider interface]
-    P --> O[OpenAI Responses: native function calling]
+    P --> RP[OpenAIResearchProvider: research policy]
+    RP --> M[ModelProvider: generic single turn]
+    M --> O[OpenAIModelProvider: Responses transport]
     O --> D{Model chooses action}
     D --> Q[search_web: model-chosen query]
     D --> R[read_source: discovered source ID]
@@ -35,7 +37,22 @@ flowchart TD
     G --> L[LIMIT_REACHED or FAILED]
 ```
 
-`ResearchAgent` depends on two protocols, not OpenAI objects. `ResearchProvider` returns typed native function calls and usage. `ResearchTools` exposes search and source reads. `openai_provider.py` isolates SDK requests, strict schemas, provider pricing, and hosted search. There is no agent framework or natural-language action parser.
+`ResearchAgent` depends on two protocols, not OpenAI objects. `ResearchProvider` returns typed native function calls and usage. `ResearchTools` exposes search and source reads. The research adapter owns strict schemas, provider pricing, and hosted search; `OpenAIModelProvider` handles generic decision-model transport. There is no agent framework or natural-language action parser.
+
+### Provider boundaries and claim verification
+
+```text
+FactChecker → ModelProvider → OpenAIModelProvider
+ResearchAgent → ResearchProvider → OpenAIResearchProvider → ModelProvider → OpenAIModelProvider
+```
+
+`ModelProvider` owns generic single-turn execution: caller-supplied instructions, input, tool definitions, tool choice, and output limit become a `ModelRequest`; returned calls, text, status, and usage remain a `ModelResponse`. `ResearchProvider` owns research-specific policy and validation, including its three tools and exactly-one-function-call response requirement. `FactChecker` owns verification-specific instructions, one-claim context, investigation-tool policy, and its future verification workflow. Sharing model transport does not imply sharing Agent-specific provider semantics.
+
+ResearchAgent remains discovery-driven. FactChecker remains claim-driven: one atomic `ResearchFact` projects to one `VerificationContext` containing only that claim and its original provenance. Original research evidence is inspectable historical input, not independent verification evidence. The Agent owns semantic historical decisions, including independence, contradiction, and qualification; runtime owns deterministic boundaries and provenance invariants.
+
+`FactChecker.prepare()` remains deterministic and makes no request. An injected `ModelProvider` enables `decide_next_action(max_output_tokens=3000)`, which makes one request and returns its response without interpretation. Configured `ResearchTools` expose only the search/read definitions and use `tool_choice="required"` for this single investigation-action stage. Without tools, the request uses `tool_choice="none"`. This is not the final terminal/verdict policy; no verdict-submission mechanism or autonomous verification loop exists yet.
+
+Tool definitions do not execute tools. Returned tool calls request actions without executing them or accepting evidence. Model text is not a `VerificationResult`. No verification evidence is selected or extracted by this single-turn boundary.
 
 Each iteration has up to eight model turns. The model can search/read several times before calling `checkpoint_research`. That tool supplies the entire evolving plan and new/updated facts. Existing gap IDs, questions and critical flags cannot silently disappear or change; the model may add new questions and update statuses. Covered gaps require fact references. A completed or interrupted iteration publishes a self-contained checkpoint. An initial empty checkpoint and explicit terminal-condition checkpoints are also retained.
 
@@ -213,6 +230,7 @@ There is no distributed lock, exactly-once provider execution, or cross-file tra
 
 - **Phase 1:** typed contracts, explicit workflow, external human approval records, immutable artifacts, runtime snapshots and CLI.
 - **Phase 2 (current):** autonomous research planning, native tool calling, source-derived evidence, bounded context, budgets, checkpoints and resume.
-- **Later:** independent Fact Checker, human fact approval application, verified knowledge base, embeddings/vector storage/RAG, Story Architect, Script Writer, grounding validation, Visual Director, image/video/TTS generation, FFmpeg assembly and publishing.
+- **Phase 3 (in progress):** verification contracts, claim-bounded input, shared investigation capabilities, and a single model-decision boundary.
+- **Later:** autonomous independent verification and verdict submission, human fact approval application, verified knowledge base, embeddings/vector storage/RAG, Story Architect, Script Writer, grounding validation, Visual Director, image/video/TTS generation, FFmpeg assembly and publishing.
 
-No Phase 3+ behavior is implemented.
+Fact Checker decisions currently stop at model output; tool execution, verification evidence acceptance, verdicts, and workflow integration are not implemented.

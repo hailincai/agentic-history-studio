@@ -41,7 +41,8 @@ def test_shared_fake_dependencies_are_injected_without_execution_or_model_calls(
     assert state == context.model_dump(mode="json")
     assert "RF-other" not in checker.prepare()
     assert "RESEARCH_INPUT_NOT_INDEPENDENT_VERIFICATION" in checker.prepare()
-    assert all(not hasattr(checker, name) for name in ("run", "verify", "complete", "provider"))
+    assert all(not hasattr(checker, name) for name in ("run", "verify", "complete"))
+    assert checker.provider is None
 
 
 def test_search_read_fake_outputs_remain_shared_observations_not_verification():
