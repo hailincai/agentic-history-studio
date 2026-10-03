@@ -2,7 +2,7 @@
 
 Agentic History Studio builds source-grounded historical documentaries with explicit human review. The first planned documentary is a five-minute Chinese film about Li Bai (李白).
 
-**Implemented:** project/state/artifact infrastructure, autonomous research with bounded retrieval, verification contracts, and caller-controlled FactChecker decisions, search/read dispatch, and one observation round trip. Autonomous verification and final verdict generation are planned. The normal test suite is offline; the CLI `research` command makes paid requests.
+**Implemented:** project/state/artifact infrastructure, autonomous research with bounded retrieval, verification contracts, and FactChecker decisions, search/read dispatch, observation round trips, and bounded autonomous investigation. Final verification submission and verdict generation are planned. The normal test suite is offline; the CLI `research` command makes paid requests.
 
 ## System and responsibility boundaries
 
@@ -13,8 +13,8 @@ flowchart LR
     Scope[Project scope] --> Research[ResearchAgent: implemented]
     Research --> Package[(ResearchPackage)]
     Package --> Context[One-claim VerificationContext]
-    Context --> Checker[FactChecker: decision / dispatch / follow-up APIs]
-    Checker -. planned autonomous verification .-> Result[VerificationResult: contract exists]
+    Context --> Checker[FactChecker: bounded investigation]
+    Checker -. planned evidence acceptance / verdict .-> Result[VerificationResult: contract exists]
     Result -. planned integration .-> Human[Human fact approval]
     Human -. planned .-> Downstream[Story / script / media pipeline]
 ```
@@ -43,7 +43,9 @@ flowchart TD
     Obs -->|caller explicitly invokes follow-up| Q2
     Q2 --> P2[ModelProvider.decide]
     P2 --> R2[ModelResponse 2]
-    R2 --> Stop[STOP: returned calls are not executed]
+    R2 --> Boundary{investigate: step ceiling / text / no call?}
+    Boundary -->|continue with one validated call| Validate
+    Boundary -->|stop| Stop[InvestigationOutcome: no historical verdict]
 ```
 
 Tool definitions describe capabilities. Model-requested calls and Python execution are separate steps; tool arguments are untrusted model output. `SearchRequest` validates a query and `ReadRequest` validates a source ID before the shared tool methods run:
@@ -69,11 +71,11 @@ These are injected protocols with OpenAI implementations. `OpenAIModelProvider` 
 
 FactChecker uses the generic boundary directly and supplies verification instructions. Its current investigation turns use `tool_choice="required"` when tools are configured and `"none"` otherwise. This is temporary investigation policy, not a terminal/verdict policy.
 
-## FactChecker: one claim, explicit reasoning steps
+## FactChecker: one claim, bounded investigation
 
 One atomic `ResearchFact` projects to one `VerificationContext` and eventually one `VerificationResult`. `build_verification_context(package, research_fact_id)` selects a detached target fact plus exactly the source records referenced by its evidence. The contract enforces `TARGET_CLAIM_ONLY` and forbids whole-topic research.
 
-The current APIs are independently invoked by the caller:
+The single-turn APIs remain independently callable; the investigation API composes them:
 
 - `prepare()`: serialize instructions and the original one-claim context; no model request.
 - `decide_next_action(max_output_tokens=3000)`: one model request; return its response unchanged.
@@ -84,7 +86,11 @@ Reads resolve metadata from original context sources or prior explicit search di
 
 The follow-up input is fresh JSON with `verification_context`, `observation_role`, and `current_observation`. It includes search metadata/snippets or read metadata/text, preserves truncation, and excludes observation usage from model input. The complete serialized observation must fit **12,000 characters**, including JSON escaping and metadata; otherwise it fails before a model call. This is an observation bound, not a total-request/token bound. The original context is claim-bounded but has no separate aggregate character cap.
 
-This supports caller-controlled **Reason → Act → Observe → Reason**, stopping after the returned second response. Methods do not enforce a session-wide turn counter; there is no autonomous loop, automatic retry, accumulated transcript, or automatic execution of second-turn calls. Text and status remain model output. Runtime/protocol failure is not an `UNVERIFIED` historical outcome.
+`investigate(max_steps=4, max_output_tokens=3000)` composes **Reason → Act → Observe → Reason** into a bounded autonomous investigation. Each step makes one provider decision and executes at most one search/read action. Runtime owns the positive-integer step ceiling; the Agent chooses actions. A valid executable decision has exactly one call. Multiple calls, unsupported names, malformed arguments, and non-completed response statuses fail as protocol errors; provider/tool exceptions propagate without retries.
+
+The transient `InvestigationOutcome` contains `final_response`, accumulated `observations`, `steps`, and `stop_reason`. At the ceiling, the last valid requested action executes and the loop returns LIMIT_REACHED without an extra model call. With no tool call, nonblank text produces MODEL_TEXT and an empty/whitespace response produces NO_TOOL_CALL. None is a historical verdict or UNVERIFIED.
+
+Only the current observation enters the next fresh request. Runtime observation history is returned for reporting, not replayed as a model transcript. Source lookup metadata survives steps to support discovered-source reads. Each investigation invocation starts with the original claim context and a fresh step/history count; there is no persistence or cumulative FactChecker budget accounting yet. Single-turn methods still return their output without automatic dispatch. Evidence acceptance, final submission, and verdict generation remain unimplemented.
 
 ## Evidence and identity contracts
 
@@ -290,6 +296,6 @@ There is no distributed lock, exactly-once provider execution, or cross-file tra
 
 ## Implementation boundary and planned work
 
-Implemented: typed project/state/artifact infrastructure, human approval records, autonomous research, source-span evidence and carry-forward, lexical retrieval, cumulative budgets/checkpoints/resume, verification contracts and one-claim projection, generic model transport, and explicit FactChecker decision/dispatch/observation-follow-up APIs.
+Implemented: typed project/state/artifact infrastructure, human approval records, autonomous research, source-span evidence and carry-forward, lexical retrieval, cumulative budgets/checkpoints/resume, verification contracts and one-claim projection, generic model transport, and FactChecker decision/dispatch/observation-follow-up APIs composed into bounded autonomous investigation.
 
-Planned: autonomous FactChecker investigation, verification evidence acceptance/canonical extraction, final VerificationResult generation, terminal `submit_verification` policy, and integrated FactChecker persistence/resume/workflow transitions. Human fact approval application and downstream Story Architect, script, visual/media generation, assembly, and publishing remain planned; downstream data contracts already exist. Hybrid/vector retrieval is also deferred.
+Planned: verification evidence acceptance/canonical extraction, final VerificationResult generation, terminal `submit_verification` policy, and integrated FactChecker persistence/resume/workflow transitions. Human fact approval application and downstream Story Architect, script, visual/media generation, assembly, and publishing remain planned; downstream data contracts already exist. Hybrid/vector retrieval is also deferred.

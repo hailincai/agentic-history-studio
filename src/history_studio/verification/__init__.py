@@ -1,4 +1,5 @@
-"""Claim-driven Fact Checker preparation; execution is not implemented yet."""
+"""Claim-driven bounded investigation; evidence acceptance and verdicts remain separate."""
 from .agent import FactChecker
+from .investigation import InvestigationOutcome, InvestigationStopReason
 
-__all__ = ["FactChecker"]
+__all__ = ["FactChecker", "InvestigationOutcome", "InvestigationStopReason"]

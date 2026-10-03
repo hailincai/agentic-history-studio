@@ -1,4 +1,4 @@
-"""Claim-bounded preparation, single decisions, and explicit dispatch; no loop or verdicts."""
+"""Claim-bounded decisions, dispatch, and bounded investigation; no verdict generation."""
 import json
 
 from history_studio.model_io import ModelProvider, ModelRequest, ModelResponse, NativeToolCall
@@ -8,10 +8,11 @@ from history_studio.research.boundaries import ResearchTools, ToolObservation
 from .context import (INSTRUCTIONS, OBSERVATION_INSTRUCTIONS, build_context, serialize_context,
                       serialize_observation_context)
 from .tools import investigation_tools
+from .investigation import InvestigationOutcome, InvestigationStopReason
 
 
 class FactChecker:
-    """Prepare one atomic claim and request one model decision without executing tools."""
+    """Investigate one atomic claim through explicit boundaries and a bounded runtime loop."""
 
     def __init__(self, context: VerificationContext, tools: ResearchTools | None = None, *,
                  provider: ModelProvider | None = None) -> None:
@@ -56,6 +57,34 @@ class FactChecker:
             input=serialize_observation_context(self._context, observation), tools=tools,
             tool_choice="required" if tools else "none", max_output_tokens=max_output_tokens)
         return self.provider.decide(request)
+
+    def investigate(self, *, max_steps: int = 4,
+                    max_output_tokens: int = 3000) -> InvestigationOutcome:
+        """Each step is one decision plus at most one action; never request beyond the ceiling.
+
+        Keep runtime observations for reporting, but send only the current observation
+        with original claim context. Limits/text/absence are not verification judgments.
+        """
+        if isinstance(max_steps, bool) or not isinstance(max_steps, int) or max_steps < 1:
+            raise ValueError("max_steps must be a positive integer")
+        observations = []
+        for step in range(1, max_steps + 1):
+            response = (self.decide_after_observation(observations[-1], max_output_tokens=max_output_tokens)
+                        if observations else self.decide_next_action(max_output_tokens=max_output_tokens))
+            if not isinstance(response, ModelResponse):
+                raise TypeError("Investigation requires a ModelResponse")
+            if response.status not in (None, "completed"):
+                raise ValueError("Investigation requires a completed model response")
+            if len(response.tool_calls) > 1:
+                raise ValueError("Investigation permits exactly one tool call per executable decision")
+            if not response.tool_calls:
+                reason = (InvestigationStopReason.MODEL_TEXT if response.text.strip()
+                          else InvestigationStopReason.NO_TOOL_CALL)
+                return InvestigationOutcome(final_response=response, observations=observations,
+                                            steps=step, stop_reason=reason)
+            observations.append(self.execute_tool_call(response.tool_calls[0]))
+        return InvestigationOutcome(final_response=response, observations=observations,
+                                    steps=max_steps, stop_reason=InvestigationStopReason.LIMIT_REACHED)
 
     def execute_tool_call(self, call: NativeToolCall, *, max_chars: int = 8000) -> ToolObservation:
         """Execute one explicit search/read request and stop at investigation material.
