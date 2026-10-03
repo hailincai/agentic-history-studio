@@ -1,96 +1,164 @@
 # Agentic History Studio
 
-Agentic History Studio is an AI engineering project for source-grounded historical documentaries with explicit human review. The planned first documentary is a five-minute Chinese film about Li Bai (李白).
+Agentic History Studio builds source-grounded historical documentaries with explicit human review. The first planned documentary is a five-minute Chinese film about Li Bai (李白).
 
-**Under active development. Phase 1 infrastructure and Phase 2 autonomous research are implemented.** Phase 3 provides verification contracts, claim-bounded context, and a single Fact Checker model decision; autonomous verification and verdict submission remain future work. Research uses the official OpenAI Python SDK and Responses API. The normal test suite is offline and free; the `research` command makes paid API calls.
+**Implemented:** project/state/artifact infrastructure, autonomous research with bounded retrieval, verification contracts, and caller-controlled FactChecker decisions, search/read dispatch, and one observation round trip. Autonomous verification and final verdict generation are planned. The normal test suite is offline; the CLI `research` command makes paid requests.
 
-## Research Agent responsibility
+## System and responsibility boundaries
 
-The Research Agent collects **candidate evidence**, not verified historical truth. It creates and evolves its own research questions, chooses search queries and source reads, identifies gaps, and recommends when coverage is sufficient. Its plan needs no human approval. A generic optional `research_scope` constrains the investigation; outside-scope reading is permitted only for minimal context needed by an in-scope claim.
-
-The agent does not write narration or dialogue, create a story, score source reliability, adjudicate disputed claims, or approve its own work. Research confidence is explicitly distinct from verified confidence. Competing claims coexist under a shared `dispute_group_id`.
-
-## Architecture
-
-```mermaid
-flowchart TD
-    C[ProjectConfig and optional research_scope] --> A[ResearchAgent: explicit bounded loop]
-    A --> X[Bounded context: current plan, facts, source metadata]
-    X --> P[ResearchProvider interface]
-    P --> RP[OpenAIResearchProvider: research policy]
-    RP --> M[ModelProvider: generic single turn]
-    M --> O[OpenAIModelProvider: Responses transport]
-    O --> D{Model chooses action}
-    D --> Q[search_web: model-chosen query]
-    D --> R[read_source: discovered source ID]
-    Q --> T[ResearchTools interface]
-    R --> T
-    T --> W[Hosted web search / bounded public HTML fetch]
-    W --> B[Latest bounded tool observation]
-    B --> X
-    D --> U[checkpoint_research: plan, facts, recommendation]
-    U --> V[Python validates provenance and coverage]
-    V --> K[(Immutable ResearchPackage versions)]
-    K --> G{Deterministic budgets and limits}
-    G -->|continue| A
-    G -->|valid completion| F[RESEARCH_COMPLETE]
-    G --> L[LIMIT_REACHED or FAILED]
-```
-
-`ResearchAgent` depends on two protocols, not OpenAI objects. `ResearchProvider` returns typed native function calls and usage. `ResearchTools` exposes search and source reads. The research adapter owns strict schemas, provider pricing, and hosted search; `OpenAIModelProvider` handles generic decision-model transport. There is no agent framework or natural-language action parser.
-
-### Provider boundaries and claim verification
-
-```text
-FactChecker → ModelProvider → OpenAIModelProvider
-ResearchAgent → ResearchProvider → OpenAIResearchProvider → ModelProvider → OpenAIModelProvider
-```
-
-`ModelProvider` owns generic single-turn execution: caller-supplied instructions, input, tool definitions, tool choice, and output limit become a `ModelRequest`; returned calls, text, status, and usage remain a `ModelResponse`. `ResearchProvider` owns research-specific policy and validation, including its three tools and exactly-one-function-call response requirement. `FactChecker` owns verification-specific instructions, one-claim context, investigation-tool policy, and its future verification workflow. Sharing model transport does not imply sharing Agent-specific provider semantics.
-
-ResearchAgent remains discovery-driven. FactChecker remains claim-driven: one atomic `ResearchFact` projects to one `VerificationContext` containing only that claim and its original provenance. Original research evidence is inspectable historical input, not independent verification evidence. The Agent owns semantic historical decisions, including independence, contradiction, and qualification; runtime owns deterministic boundaries and provenance invariants.
-
-`FactChecker.prepare()` remains deterministic and makes no request. An injected `ModelProvider` enables `decide_next_action(max_output_tokens=3000)`, which makes one request and returns its response without interpretation. Configured `ResearchTools` expose only the search/read definitions and use `tool_choice="required"` for this single investigation-action stage. Without tools, the request uses `tool_choice="none"`. This is not the final terminal/verdict policy; no verdict-submission mechanism or autonomous verification loop exists yet.
-
-Tool definitions do not execute tools. Returned tool calls request actions without executing them or accepting evidence. Model text is not a `VerificationResult`. No verification evidence is selected or extracted by this single-turn boundary.
-
-`FactChecker.execute_tool_call(call, max_chars=8000)` is a separate, explicit runtime boundary: one `NativeToolCall` becomes one search/read invocation and returns its `ToolObservation`. Runtime allows only `search_web` and `read_source`, rejects malformed/non-object JSON, and validates arguments through the shared `SearchRequest`/`ReadRequest` contracts before invoking tools. Reads resolve source metadata from original context sources or prior explicit search observations; no source ID is invented, and this metadata lookup does not authorize verification evidence. `call_id` stays on the original call for caller-managed correlation and is never a provenance identifier.
-
-The Agent decides the requested action; runtime validates and executes it. Tool arguments are untrusted model output. Tool execution does not accept evidence: search/read observations remain investigation material for future Agent selection and canonical runtime extraction. A runtime/protocol failure is not an `UNVERIFIED` historical outcome. Dispatch does not call the model, retry, persist data, or automatically feed observations back into another turn.
-
-Each iteration has up to eight model turns. The model can search/read several times before calling `checkpoint_research`. That tool supplies the entire evolving plan and new/updated facts. Existing gap IDs, questions and critical flags cannot silently disappear or change; the model may add new questions and update statuses. Covered gaps require fact references. A completed or interrupted iteration publishes a self-contained checkpoint. An initial empty checkpoint and explicit terminal-condition checkpoints are also retained.
-
-Progress is measured from accepted state, not artifact versions. Newly accepted claims (including competing claims), canonical evidence, discovered source URLs, read representation versions, new research questions, and forward goal-status transitions count. Carry-forward evidence, repeat reads of the same representation, confidence/notes/title edits, and status regression/re-promotion do not. Hashed historical signals prevent repeated credit across iterations and resumes.
-
-A valid but non-progressing checkpoint returns structured `no_progress` feedback with unresolved goal IDs and exact completion deficits, including distinct **cited** sources. It is not published and does not end the iteration; the Agent retains current read spans and chooses its next action freely. `max_no_progress_checkpoints` defaults to 3 consecutive attempts, then stops with `no_progress_limit`. The streak and previous checkpoint outcome persist in the runtime ledger; resume does not clear the guard. Genuine progress resets the streak. Deterministically valid `COMPLETE` is accepted even if no additional evidence was needed. Existing turn, iteration, context, and spending limits still apply.
-
-## Provenance and contracts
+**Agent owns semantic decisions. Runtime owns deterministic invariants.** The Agent chooses what to investigate, which search/read action is useful, and how source material supports, contradicts, or qualifies a claim. Python enforces allowed capabilities, JSON parsing, typed inputs, tool execution, context bounds, provenance, persistence, and workflow state. A canonical quote proves where text came from; it does not prove reliability or entailment.
 
 ```mermaid
 flowchart LR
-    F[ResearchFact: one candidate atomic claim] --> E[EvidenceReference: source_id, excerpt, span_id, source_version]
-    E --> S[Deduplicated SourceReference]
-    S --> U[Real source URL]
+    Scope[Project scope] --> Research[ResearchAgent: implemented]
+    Research --> Package[(ResearchPackage)]
+    Package --> Context[One-claim VerificationContext]
+    Context --> Checker[FactChecker: decision / dispatch / follow-up APIs]
+    Checker -. planned autonomous verification .-> Result[VerificationResult: contract exists]
+    Result -. planned integration .-> Human[Human fact approval]
+    Human -. planned .-> Downstream[Story / script / media pipeline]
 ```
 
-- `HistoricalTime` retains the original `display` alongside optional `start_year`, `end_year`, and precision. Years use astronomical numbering (0 = 1 BCE). Era names and uncertain dates need not be converted to exact Gregorian dates.
-- `ResearchFact` has a stable `fact_id`, one `claim`, structured historical time, `research_confidence`, evidence, optional dispute group, and `research_notes`. Structural validation rejects claim lists and semicolon-separated bundles; semantic atomicity and scope adherence still require model judgment and later review.
-- `read_source` exposes a bounded list of `{span_id, text}` entries, `source_id`, `source_version`, and `truncated`. The Agent selects `{source_id, span_id}` in checkpoint evidence; it never supplies excerpt text or character offsets. Python resolves the selection and persists the canonical excerpt. Unread sources, invented spans, source mismatches, and stale versions are rejected with structured diagnostics. Search summaries are **never** evidence. The existing whitespace-normalized exact-substring check remains a final invariant.
-- Span generation normalizes whitespace over the exact retained read text, then packs Chinese/English sentence endings into spans of at most 600 Unicode code points. Without a usable sentence boundary, it prefers whitespace in the latter half of that window, then falls back to a hard bounded split. HTML entities and markup are handled by the existing source reader. Paragraph breaks have already been normalized away. Source version is SHA-256 of the algorithm version, source ID, retained normalized text and truncation flag; span ID hashes that version plus Python-owned start/end boundaries. No offsets need to be calculated by the Agent.
-- Span text and metadata count toward the existing observation allocation. If needed, Python drops trailing spans, marks truncation, and recomputes identity for the exact exposed representation. Current-iteration reads are transient; correction context retains only the latest read's spans. A reread replaces that source's current representation. Unchanged facts may be omitted or resubmitted. For the same fact, accepted source/span IDs carry the complete persisted evidence record forward without a reread, including across resume. New or changed selections still require a current-iteration read; proposals cannot override excerpt or source-version fields.
-- Existing `ResearchPackage` version 2 artifacts remain readable with absent `span_id`/`source_version`; no files are migrated or rewritten. New evidence stores both fields alongside canonical excerpt text. Old native checkpoint proposals containing `excerpt` are rejected: the proposal contract is now selection-only. The evidence chain remains fact → evidence → source.
-- Source IDs are deterministic hashes of canonical URLs. Fragments and common tracking parameters are removed, query parameters sorted, and repeated URLs deduplicated. Source types default to `UNKNOWN` until classification is available; no numeric quality score is assigned. Publisher/domain and metadata are separate from fact evidence.
-- One `ResearchPackage` versions the plan, facts, source table, run ID, iteration, status and stop condition together. Source metadata is not duplicated in Phase 2 facts.
-- Phase 1 `ResearchFact` field names and embedded-source objects remain readable. New packages reject legacy embedded provenance and require structured time and evidence. Legacy JSON is not silently migrated into source-grounded research.
-- Research notes remain explicitly separate metadata. `facts_without_research_notes()` provides an intentional projection for later consumers; no Story Agent is implemented and candidate facts are not automatically approved for storytelling.
+| Component | Investigation boundary | Current output |
+|---|---|---|
+| ResearchAgent | Discovery-driven: scope → goals → search/read → candidate facts | Immutable ResearchPackage checkpoints |
+| FactChecker | Claim-driven: one ResearchFact → claim-specific investigation | ModelResponse and separately dispatched ToolObservation; eventual verdict is planned |
 
-A source-derived excerpt proves provenance, not that the source is reliable or the claim follows from it. Those are deliberately left for independent fact checking.
+Independent verification retains original research provenance as inspectable input. It does not restart broad topic research or treat research confidence as verified confidence. Research may preserve competing claims under a shared `dispute_group_id`; it does not adjudicate them, approve facts, or create narration/media.
 
-## Context management
+## Model and tool execution
 
-Every model turn starts from current structured state, not accumulated conversation history. Context includes project/scope, instructions, all compact facts, current plan, source metadata, remaining limits, and the latest tool call/result. The adapter sends native `function_call` / `function_call_output` items; it does not use `previous_response_id` or retain hidden reasoning.
+`ModelRequest` is Python's input to the generic model boundary: instructions, string/message input, tool definitions, tool choice, and output-token limit. `ModelProvider.decide(request)` returns `ModelResponse`: native calls, text, usage, status, and optional incomplete reason. A `NativeToolCall` carries `call_id`, `name`, and raw JSON `arguments`. It requests an action; it does not execute it.
 
-Defaults reserve 24,000 characters for dynamic context, including at most 9,000 characters for the latest observation/call. Source passages are capped at 8,000 characters and fetched bodies at 1 MB. The fixed tool schemas are counted separately in cost reservations. If structured state or the latest observation cannot fit, the run explicitly stops with `LIMIT_REACHED`; facts or critical gaps are never silently truncated out of the plan. Raw page text and the span registry are transient and discarded after the iteration; bounded latest-read spans survive validation feedback within that iteration. Stored evidence excerpts remain in subsequent compact context.
+```mermaid
+flowchart TD
+    C[Original VerificationContext] --> Q1[ModelRequest 1]
+    Q1 --> P1[ModelProvider.decide]
+    P1 --> R1[ModelResponse 1 / NativeToolCall]
+    R1 -->|caller explicitly invokes dispatch| Validate[Runtime: allowed name + JSON + typed request]
+    Validate --> Input[SearchRequest / ReadRequest]
+    Input --> Tools[ResearchTools: one search or read]
+    Tools --> Obs[ToolObservation: investigation material]
+    C --> Q2[Fresh ModelRequest 2]
+    Obs -->|caller explicitly invokes follow-up| Q2
+    Q2 --> P2[ModelProvider.decide]
+    P2 --> R2[ModelResponse 2]
+    R2 --> Stop[STOP: returned calls are not executed]
+```
+
+Tool definitions describe capabilities. Model-requested calls and Python execution are separate steps; tool arguments are untrusted model output. `SearchRequest` validates a query and `ReadRequest` validates a source ID before the shared tool methods run:
+
+```python
+tools.search_web(request.query)
+tools.read_source(source_reference, max_chars)
+```
+
+`ToolObservation` contains `kind` (`search` or `source`), source metadata, text, optional source ID, truncation flag, and usage. Search results are leads; read text is investigation material. Neither automatically becomes accepted evidence. The OpenAI search adapter returns at most eight source records and no synthesized evidence text; the reader returns bounded public HTML/text.
+
+### Provider dependency structure
+
+```text
+FactChecker → ModelProvider → OpenAIModelProvider
+ResearchAgent → ResearchProvider → OpenAIResearchProvider
+                                      → ModelProvider → OpenAIModelProvider
+```
+
+These are injected protocols with OpenAI implementations. `OpenAIModelProvider` sends one Responses request with `parallel_tool_calls=False` and `store=False`, then maps output into generic contracts. It does not decode action arguments or interpret historical meaning. Generic transport is separate from Agent-specific policy.
+
+`OpenAIResearchProvider` constructs research tool schemas, requires a completed response with exactly one function call, decodes its JSON into a typed research `ToolCall`/`ModelReply`, and supports cost reservations. ResearchAgent then validates the allowed action and its domain input. Its native tools are `search_web`, `read_source`, and `checkpoint_research`, with `tool_choice="required"`.
+
+FactChecker uses the generic boundary directly and supplies verification instructions. Its current investigation turns use `tool_choice="required"` when tools are configured and `"none"` otherwise. This is temporary investigation policy, not a terminal/verdict policy.
+
+## FactChecker: one claim, explicit reasoning steps
+
+One atomic `ResearchFact` projects to one `VerificationContext` and eventually one `VerificationResult`. `build_verification_context(package, research_fact_id)` selects a detached target fact plus exactly the source records referenced by its evidence. The contract enforces `TARGET_CLAIM_ONLY` and forbids whole-topic research.
+
+The current APIs are independently invoked by the caller:
+
+- `prepare()`: serialize instructions and the original one-claim context; no model request.
+- `decide_next_action(max_output_tokens=3000)`: one model request; return its response unchanged.
+- `execute_tool_call(call, max_chars=8000)`: validate and execute exactly one search/read call; return the same tool observation. Malformed/non-object JSON, invalid typed arguments, unknown names, and `checkpoint_research` fail before execution.
+- `decide_after_observation(observation, max_output_tokens=3000)`: one follow-up request containing original context plus one current observation; return the response without executing another action or interpreting a verdict.
+
+Reads resolve metadata from original context sources or prior explicit search dispatches. This in-memory source lookup supports execution; it is not evidence authorization or Agent knowledge. Dispatch preserves the original context and does not invoke the provider.
+
+The follow-up input is fresh JSON with `verification_context`, `observation_role`, and `current_observation`. It includes search metadata/snippets or read metadata/text, preserves truncation, and excludes observation usage from model input. The complete serialized observation must fit **12,000 characters**, including JSON escaping and metadata; otherwise it fails before a model call. This is an observation bound, not a total-request/token bound. The original context is claim-bounded but has no separate aggregate character cap.
+
+This supports caller-controlled **Reason → Act → Observe → Reason**, stopping after the returned second response. Methods do not enforce a session-wide turn counter; there is no autonomous loop, automatic retry, accumulated transcript, or automatic execution of second-turn calls. Text and status remain model output. Runtime/protocol failure is not an `UNVERIFIED` historical outcome.
+
+## Evidence and identity contracts
+
+| Object / identity | Meaning |
+|---|---|
+| `SourceReference.source_id` | Source metadata identity: URL, title, type, access time, and optional publisher/author details. Research derives IDs from canonical URLs. |
+| `ResearchFact.fact_id` | Stable identity of one candidate atomic claim. |
+| `EvidenceReference` | Research provenance: `source_id`, canonical `excerpt`, optional `locator`, and paired `source_version`/`span_id`. |
+| `source_version` / `span_id` | Exact fetched-representation identity and an addressable canonical text span. |
+| `VerificationEvidence` | Separate verification contract inheriting EvidenceReference fields; acceptance/extraction runtime is planned. |
+| `NativeToolCall.call_id` | Model/runtime correlation only; never a source, evidence, or span identity. |
+| `VerificationResult.verification_id` | Result identity; `research_fact_id` and exact `claim_snapshot` identify the evaluated claim. |
+| Retrieved `E-` keys | Context-local hashed evidence-table references, not a persisted `evidence_id` field and not IDs accepted by checkpoint span selection. |
+
+Research evidence and independently accepted verification evidence remain distinct. Different URLs/source IDs do not prove independent underlying information; mirrors or retellings can share the same origin. Independence is a semantic judgment.
+
+Research checkpoint proposals select `{source_id, span_id}`; Python extracts the canonical excerpt. New/changed evidence requires a known, current-iteration read representation. Unread, invented, mismatched, and stale spans fail deterministic validation. Unchanged evidence on the same accepted fact carries forward its complete persisted record without rereading, including after resume. The model cannot override excerpt or version fields. Whitespace-normalized exact-substring validation remains a final provenance invariant.
+
+Span generation normalizes retained read whitespace and packs Chinese/English sentence boundaries into at most 600 Unicode code points, with whitespace/hard-split fallback. Version identity hashes the algorithm version, source ID, normalized text, and truncation flag; span identity hashes the version and Python-owned boundaries. Retrieval selects whole canonical spans without changing text, IDs, or versions. HTML decoding belongs to the reader.
+
+`ResearchFact` retains structured `HistoricalTime`, unverified confidence, optional dispute group, and separate research notes. Historical time preserves original display and uncertainty; astronomical year numbering uses 0 for 1 BCE. Structural atomicity checks do not replace semantic review. Legacy field spellings remain readable, and old evidence may omit paired span/version fields; current packages require structured time and evidence-only provenance.
+
+### Verification outcomes: contracts, not generated verdicts yet
+
+| Status | Meaning |
+|---|---|
+| VERIFIED | Independent support for the core claim without material contradiction. |
+| PARTIALLY_VERIFIED | Partial/core support with material qualifications or unresolved details. |
+| DISPUTED | Credible competing support and contradiction remain unresolved. |
+| REJECTED | Independent contradiction makes the core claim unsustainable. |
+| UNVERIFIED | Adequate investigation leaves insufficient independent evidence. |
+
+DISPUTED preserves competing evidence; it does not reject the claim. Insufficient evidence is also not rejection. `VerificationResult` structurally requires appropriate supporting/contradictory evidence or unresolved issues, plus rationale and an independence note. No current FactChecker method generates or persists this result.
+
+## Research planning, checkpoints, and completion
+
+The Agent decomposes broad scope into independently assessable goals without a fixed goal count. `ResearchPlan.gaps` stores goal identity, question, critical flag, status, completion criteria, fact links, and optional coverage assessment. Critical goals represent required scope; noncritical goals are optional enrichment.
+
+OPEN and INVESTIGATING are nonterminal. COVERED means criteria were adequately addressed; RESEARCHED_UNRESOLVED means genuine investigation cannot resolve the question definitively. Terminal assessments record criterion/addressed pairs, supporting fact IDs, unresolved issues where required, and concise rationale. Python checks references and structure; semantic sufficiency remains the Agent's responsibility.
+
+A research iteration is a bounded runtime segment with up to eight model turns by default, ending when a progressing checkpoint is accepted or completion succeeds. One model turn can request one search, read, or checkpoint action. A checkpoint need not contain a new fact: new questions or discovered sources can count as progress. Initial and limit/failure snapshots are also persisted.
+
+`checkpoint_research` submits the complete evolving plan, new/updated facts, and CONTINUE/COMPLETE. Existing goal IDs, questions, critical flags, and fact claim identities cannot silently change. Recoverable validation rejection returns feedback within the same turn/iteration limits and retains current-read context.
+
+Progress is measured from accepted structural signals: new claims, canonical evidence, source URLs, read versions, or questions. Forward coverage progress requires new linked research support; status changes or cosmetic assessment prose alone earn no credit. Hashed historical signals prevent repeated credit across iterations/resume. A non-progressing incomplete proposal is not published and does not end the iteration; three consecutive attempts stop with `no_progress_limit` by default.
+
+COMPLETE requires the Agent recommendation plus deterministic minima for facts and distinct cited sources, a nonempty plan and coverage summary, valid terminal assessments, and no nonterminal/invalid critical goals. RESEARCHED_UNRESOLVED can satisfy the terminal requirement. These checks do not prove the model decomposed scope adequately or made sound historical judgments.
+
+## Memory, retrieval, and context bounds
+
+**Persistent available information differs from LLM working context.** A ResearchPackage is the complete durable research artifact; each model request receives a bounded projection, not the whole package. Retrieved memory is a subset of available memory.
+
+```mermaid
+flowchart TD
+    Package[(ResearchPackage: accepted facts / evidence / source catalog)] --> KR[LexicalKnowledgeRetriever]
+    Package --> Plan[Global plan overview / coverage / totals]
+    Read[Successful canonical source read] --> Store[(SourceStore: immutable representations)]
+    Read --> Current[Current authorized SourceSpans]
+    Current --> SR[Lexical source-span retrieval]
+    KR --> Work[Bounded Research working context]
+    SR --> Work
+    Plan --> Work
+    Work --> Model[Research model turn]
+```
+
+`SourceStore` persists complete bounded canonical reads in `.runtime/sources/<source_id>/<source_version>.json`, validating content/identity on put/get. Current source retrieval ranks spans from the latest current read using active goals, criteria, scope, and topic. It selects whole spans by lexical overlap within serialized budget. Stored historical sources are not automatically loaded or authorized after resume.
+
+`KnowledgeRetriever` selects accepted package knowledge. The default `LexicalKnowledgeRetriever` ranks claims/notes, carries whole facts with linked canonical evidence, and supplies a bounded source catalog. Global plan identities/criteria, coverage status, and package totals remain visible even when facts are omitted. Retrieved evidence uses an `E-` table to avoid repeated records. Unicode normalization affects ranking only; canonical evidence is unchanged. Both retrieval paths are deterministic lexical retrieval; hybrid/vector retrieval is deferred.
+
+Retrieval controls visibility, not evidence truth or authorization. New evidence is resolved against canonical current reads; accepted same-fact evidence has immutable carry-forward semantics. Correction feedback does not displace the latest retrieved read context.
+
+Research reconstructs state every turn and replays only the current native function call/output pair, with no `previous_response_id` or retained hidden reasoning. Default dynamic context is 24,000 characters, reserving 9,000 for the current call/observation; pages are capped at 8,000 characters and fetched bodies at 1 MB. Tool schemas enter cost reservations separately. Plan/structural state that cannot fit stops explicitly; retrieved facts/sources/spans may be omitted without deleting durable knowledge. Per-iteration authorization registries are transient; canonical reads persist in SourceStore.
+
+FactChecker has separate original claim context, runtime source lookup, and one transient observation. Follow-up reasoning reconstructs these relevant inputs without adding observations to the original context, copying all runtime discoveries, or accumulating pages. Working context is not persistent memory.
 
 ## Limits and cost accounting
 
@@ -104,7 +172,7 @@ Defaults reserve 24,000 characters for dynamic context, including at most 9,000 
 | Minimum facts | 3 | 2 |
 | Minimum cited sources | 2 | 2 |
 
-The project budget also caps the research budget. Limits count attempted calls, including failures, across resumes. The model receives a soft-budget signal to consolidate. Completion requires the model's `COMPLETE` recommendation, a nonempty plan and coverage summary, enough facts and **cited** sources, and no unresolved critical gaps. Hitting a hard limit produces `LIMIT_REACHED`, never `RESEARCH_COMPLETE`.
+The project budget also caps the research budget. Limits count attempted calls, including failures, across resumes. The model receives a soft-budget signal to consolidate. Completion requires the model's `COMPLETE` recommendation, a nonempty plan and coverage summary, enough facts and **cited** sources, and no nonterminal or invalid critical goals. Terminal coverage assessments must satisfy structural/reference checks; RESEARCHED_UNRESOLVED is a valid terminal research outcome. Hitting a hard limit produces `LIMIT_REACHED`, never `RESEARCH_COMPLETE`.
 
 Before every paid request, the runtime durably reserves a conservative upper estimate using UTF-8 request bytes, tool schemas, a framing allowance, maximum output tokens, and configured provider rates. Search adds a bounded hosted tool fee and conservative search-content allowance. Reservations are never refunded, even after timeouts, missing usage, or process interruption. This deliberately may stop earlier than actual billing would require. SDK automatic retries are disabled. Hosted search is restricted to one built-in call per search request.
 
@@ -126,7 +194,8 @@ projects/<project-id>/
   .runtime/                    # Git ignored
     state.json
     research_usage.json
-    diagnostics/               # immutable, sanitized checkpoint validation records
+    sources/<source_id>/<source_version>.json  # canonical fetched representations
+    diagnostics/               # immutable, sanitized validation/provider records
       diagnostics_v1.json
     research_settings.json
     research_config.json
@@ -139,9 +208,9 @@ Successful research persists and validates its complete package **before** movin
 
 A corrupt latest package is skipped with an operational event, and an earlier valid checkpoint is loaded; all old files remain intact. If none is valid, the run refuses to start over. A missing, mismatched or invalid usage ledger blocks paid continuation, since discarding it could reset spending limits. An interrupted iteration still counts as attempted; transient page observations may need to be read again.
 
-Rejected `checkpoint_research` proposals now produce versioned diagnostics in `.runtime/diagnostics/diagnostics_vN.json`. Each records the run ID, iteration/turn, operation, exception class, validation error type, schema field/location, and a concise safe message. The CLI prints these details immediately; `status` displays the latest recorded diagnostic, including after a later successful correction. Each record includes at most 12 errors and the total count. Raw arguments, invalid input values, Pydantic error context, unknown field names, arbitrary exception text and private reasoning are excluded. Built-in errors use safe messages; known static domain validator messages are preserved.
+Rejected `checkpoint_research` proposals produce versioned diagnostics in `.runtime/diagnostics/diagnostics_vN.json`. Each records the run ID, iteration/turn, operation, exception class, validation error type, schema field/location, and a concise safe message. The CLI prints these details immediately; `status` displays the latest recorded diagnostic, including after a later successful correction. Each record includes at most 12 errors and the total count. Raw request bodies, headers, Pydantic error context, arbitrary exception text, and private reasoning are excluded. Evidence/selection diagnostics can include bounded sanitized excerpt comparisons and span/source identity details; model-request diagnostics preserve safe structured provider rejection fields and a bounded sanitized message. Built-in errors use safe messages; known static domain validator messages are preserved.
 
-Pydantic contract failures and explicit provenance/identity rejections during proposal validation are returned as a native tool-result `validation_error` observation. The model may correct its proposal on the next existing turn. Rejected proposals do not change the accepted plan/facts, and the current iteration's retrieved passages remain available to deterministic evidence checks. No retry counter or budget is reset: turn, iteration, context and paid-call admission limits remain authoritative; exhausted correction attempts produce `LIMIT_REACHED`. Unexpected provider, storage and internal failures still fail the stage. Storage/workflow operations have separate failure labels rather than being mislabeled as artifact validation. Diagnostics cannot reconstruct the missing details of runs made before this change.
+Pydantic contract failures and explicit provenance/identity rejections during proposal validation are returned as a native tool-result `validation_error` observation. The model may correct its proposal on the next existing turn. Rejected proposals do not change the accepted plan/facts, and the current iteration's retrieved passages remain available to deterministic evidence checks. No retry counter or budget is reset: turn, iteration, context and paid-call admission limits remain authoritative; exhausted correction attempts produce `LIMIT_REACHED`. Unexpected provider, storage and internal failures still fail the stage. Storage/workflow operations have separate failure labels rather than being mislabeled as artifact validation. Diagnostics cannot reconstruct details that older runs did not record.
 
 Only one local runner may hold `research.lock`. After a killed process, confirm there is no active runner before manually removing a stale lock. Do not delete the usage ledger to bypass limits. Re-running `research` uses saved configuration unless an explicit `--config` override is supplied. To continue a limit-reached run, deliberately raise the relevant **cumulative** limit in that configuration. Ordinary `resume` remains read-only and reports the retry stage and durable checkpoint.
 
@@ -195,26 +264,15 @@ Inspect the latest `projects/li_bai_early_life/research/research_vN.json` and ea
 ## Repository structure
 
 ```text
-examples/research-smoke.json
 src/history_studio/
-  __init__.py, __main__.py, cli.py
-  models/
-    base.py, project.py, sources.py, research.py
-    historical_time.py, research_package.py
-    facts.py, story.py, script.py, storyboard.py, __init__.py
-  research/
-    actions.py, agent.py, boundaries.py, config.py, context.py
-    openai_provider.py, usage.py, web_tools.py, diagnostics.py, __init__.py
-  workflow/
-    states.py, state_machine.py, approvals.py, __init__.py
-  storage/
-    artifact_store.py, __init__.py
-tests/
-  conftest.py
-  test_models.py, test_state_machine.py, test_artifact_store.py, test_cli.py
-  test_research_models.py, test_research_agent.py, test_research_usage.py
-  test_openai_provider.py, test_research_web_tools.py, test_research_cli.py
-  test_research_validation.py
+  model_io.py, openai_model.py, cli.py
+  models/       # research, time, source, verification, downstream contracts
+  research/     # loop, actions, provider/tools, spans, retrieval, SourceStore, usage
+  verification/ # preparation, decisions, explicit dispatch, observation context
+  workflow/     # states, recovery, human approval contracts
+  storage/      # immutable artifacts and atomic snapshots
+tests/          # offline behavioral tests and mocked SDK transport
+examples/research-smoke.json
 projects/.gitkeep
 ```
 
@@ -228,13 +286,10 @@ The initial reader handles bounded public HTML/text, not PDFs, authenticated pag
 
 Scope adherence, atomic meaning, relevance, completeness of the model-created gap list and quotation entailment cannot be proven by Pydantic. Structural and exact-excerpt checks are guardrails, not a hidden Fact Checker. Source text remains untrusted; prompt-injection resistance is bounded by the model's behavior and the narrow tool permissions. The default adapter is tested with a non-reasoning text model; other decision models must support the supplied Responses function schemas and stateless tool-output input. No paid compatibility claim is made for arbitrary models.
 
-There is no distributed lock, exactly-once provider execution, or cross-file transaction. Reservations and checkpoints make local recovery conservative; a lost response may have incurred a charge and a retried read/model request may consume more of the original budget. The real smoke test must still establish live provider and source behavior.
+There is no distributed lock, exactly-once provider execution, or cross-file transaction. Reservations and checkpoints make local recovery conservative; a lost response may have incurred a charge and a retried read/model request may consume more of the original budget. Live compatibility depends on provider and source behavior beyond offline mocks.
 
-## Roadmap and phase boundary
+## Implementation boundary and planned work
 
-- **Phase 1:** typed contracts, explicit workflow, external human approval records, immutable artifacts, runtime snapshots and CLI.
-- **Phase 2 (current):** autonomous research planning, native tool calling, source-derived evidence, bounded context, budgets, checkpoints and resume.
-- **Phase 3 (in progress):** verification contracts, claim-bounded input, shared investigation capabilities, and a single model-decision boundary.
-- **Later:** autonomous independent verification and verdict submission, human fact approval application, verified knowledge base, embeddings/vector storage/RAG, Story Architect, Script Writer, grounding validation, Visual Director, image/video/TTS generation, FFmpeg assembly and publishing.
+Implemented: typed project/state/artifact infrastructure, human approval records, autonomous research, source-span evidence and carry-forward, lexical retrieval, cumulative budgets/checkpoints/resume, verification contracts and one-claim projection, generic model transport, and explicit FactChecker decision/dispatch/observation-follow-up APIs.
 
-Fact Checker decisions stop at model output, and separately invoked dispatch stops at a tool observation. Autonomous round trips, verification evidence acceptance, verdicts, and workflow integration are not implemented.
+Planned: autonomous FactChecker investigation, verification evidence acceptance/canonical extraction, final VerificationResult generation, terminal `submit_verification` policy, and integrated FactChecker persistence/resume/workflow transitions. Human fact approval application and downstream Story Architect, script, visual/media generation, assembly, and publishing remain planned; downstream data contracts already exist. Hybrid/vector retrieval is also deferred.

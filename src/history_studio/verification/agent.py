@@ -5,7 +5,8 @@ from history_studio.model_io import ModelProvider, ModelRequest, ModelResponse, 
 from history_studio.models.verification_context import VerificationContext
 from history_studio.research.actions import ReadRequest, SearchRequest
 from history_studio.research.boundaries import ResearchTools, ToolObservation
-from .context import INSTRUCTIONS, build_context, serialize_context
+from .context import (INSTRUCTIONS, OBSERVATION_INSTRUCTIONS, build_context, serialize_context,
+                      serialize_observation_context)
 from .tools import investigation_tools
 
 
@@ -43,6 +44,17 @@ class FactChecker:
         request = ModelRequest(instructions=INSTRUCTIONS, input=serialize_context(self._context),
                                tools=tools, tool_choice="required" if tools else "none",
                                max_output_tokens=max_output_tokens)
+        return self.provider.decide(request)
+
+    def decide_after_observation(self, observation: ToolObservation, *,
+                                 max_output_tokens: int = 3000) -> ModelResponse:
+        """One fresh reasoning turn over original context and one transient observation; no dispatch."""
+        if self.provider is None:
+            raise RuntimeError("decide_after_observation requires an injected ModelProvider")
+        tools = self.tool_definitions()
+        request = ModelRequest(instructions=INSTRUCTIONS + "\n" + OBSERVATION_INSTRUCTIONS,
+            input=serialize_observation_context(self._context, observation), tools=tools,
+            tool_choice="required" if tools else "none", max_output_tokens=max_output_tokens)
         return self.provider.decide(request)
 
     def execute_tool_call(self, call: NativeToolCall, *, max_chars: int = 8000) -> ToolObservation:

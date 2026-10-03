@@ -2,6 +2,17 @@
 import json
 
 from history_studio.models.verification_context import VerificationContext
+from history_studio.research.boundaries import ToolObservation
+
+
+MAX_OBSERVATION_CHARS = 12000
+OBSERVATION_INSTRUCTIONS = """The current_observation is the result of a previously executed
+investigation action, not accepted VerificationEvidence or a VerificationResult. Evaluate its
+relevance, support, contradiction, and qualification for the target claim. Search snippets and
+read text are investigation material, not automatically selected evidence. Source IDs identify
+sources; tool call IDs, source IDs, evidence IDs, and span IDs are distinct identities.
+Only the original claim context and current observation are provided; no transcript is replayed.
+"""
 
 
 INSTRUCTIONS = """You are the Fact Checker, a claim-driven independent verifier.
@@ -43,3 +54,19 @@ def serialize_context(context: VerificationContext) -> str:
     validated = VerificationContext.model_validate(context.model_dump(mode="json"))
     return json.dumps(validated.model_dump(mode="json"),
         ensure_ascii=False, separators=(",", ":"))
+
+
+def serialize_observation_context(context: VerificationContext, observation: ToolObservation) -> str:
+    """Reconstruct one turn; bound the complete observation without altering source text/IDs."""
+    if not isinstance(observation, ToolObservation):
+        raise TypeError("Follow-up requires one ToolObservation")
+    validated = ToolObservation.model_validate(observation.model_dump(mode="json"))
+    payload = validated.model_dump(mode="json", exclude={"usage"})
+    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    if len(encoded) > MAX_OBSERVATION_CHARS:
+        raise ValueError("Observation exceeds model-input character limit")
+    return json.dumps({
+        "verification_context": json.loads(serialize_context(context)),
+        "observation_role": "EXECUTED_ACTION_INVESTIGATION_MATERIAL_NOT_ACCEPTED_EVIDENCE",
+        "current_observation": payload,
+    }, ensure_ascii=False, separators=(",", ":"))
