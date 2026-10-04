@@ -1,10 +1,14 @@
-"""Claim-bounded decisions, dispatch, and bounded investigation; no verdict generation."""
+"""Claim-bounded investigation and separate deterministic verification-provenance acceptance."""
 import json
+import hashlib
 
 from history_studio.model_io import ModelProvider, ModelRequest, ModelResponse, NativeToolCall
 from history_studio.models.verification_context import VerificationContext
+from history_studio.models.verification import VerificationEvidence, VerificationResult
 from history_studio.research.actions import ReadRequest, SearchRequest
 from history_studio.research.boundaries import ResearchTools, ToolObservation
+from history_studio.research.spans import SourceSpans, make_spans, resolve_selection
+from history_studio.research.web_tools import canonical_url, normalize_text
 from .context import (INSTRUCTIONS, OBSERVATION_INSTRUCTIONS, build_context, serialize_context,
                       serialize_observation_context)
 from .tools import investigation_tools
@@ -25,6 +29,10 @@ class FactChecker:
         self.provider = provider
         # Metadata lookup only: neither source discovery nor a read authorizes evidence here.
         self._sources = {source.source_id: source.model_copy(deep=True) for source in self._context.sources}
+        # Runtime-only truth/authorization, never seeded from original research evidence.
+        self._reads: dict[str, SourceSpans] = {}
+        self._seen_spans: dict[str, tuple[str, str]] = {}
+        self._read_urls: dict[str, str] = {}
 
     def prepare(self) -> str:
         """Return instructions followed by structured JSON; performs no model request."""
@@ -54,8 +62,12 @@ class FactChecker:
         if self.provider is None:
             raise RuntimeError("decide_after_observation requires an injected ModelProvider")
         tools = self.tool_definitions()
+        read = self._reads.get(observation.source_id) if isinstance(observation, ToolObservation) else None
+        if read is not None and (observation.kind != "source" or
+                                not normalize_text(observation.text).startswith(read.text)):
+            read = None
         request = ModelRequest(instructions=INSTRUCTIONS + "\n" + OBSERVATION_INSTRUCTIONS,
-            input=serialize_observation_context(self._context, observation), tools=tools,
+            input=serialize_observation_context(self._context, observation, read), tools=tools,
             tool_choice="required" if tools else "none", max_output_tokens=max_output_tokens)
         return self.provider.decide(request)
 
@@ -68,6 +80,10 @@ class FactChecker:
         """
         if isinstance(max_steps, bool) or not isinstance(max_steps, int) or max_steps < 1:
             raise ValueError("max_steps must be a positive integer")
+        # Metadata may persist, but previous investigations never authorize this one.
+        self._reads = {}
+        self._seen_spans = {}
+        self._read_urls = {}
         observations = []
         for step in range(1, max_steps + 1):
             response = (self.decide_after_observation(observations[-1], max_output_tokens=max_output_tokens)
@@ -110,6 +126,35 @@ class FactChecker:
             research_fact_id=self._context.target_fact.fact_id,
             claim_snapshot=self._context.target_fact.claim)
 
+    def finalize_submission(self, submission: VerificationSubmission) -> VerificationResult:
+        """Authenticate and extract every selected read span; no semantic inference or I/O."""
+        if not isinstance(submission, VerificationSubmission):
+            raise TypeError("Finalization requires one VerificationSubmission")
+        validated = VerificationSubmission.model_validate(submission.model_dump(mode="json"))
+        target = self._context.target_fact
+        if (validated.research_fact_id != target.fact_id or validated.claim_snapshot != target.claim):
+            raise ValueError("Submission does not match the target fact and immutable claim")
+        for read in self._reads.values():
+            if read != make_spans(read.source_id, read.text, read.truncated):
+                raise ValueError("Canonical investigation material is unavailable or invalid")
+        data = validated.model_dump(mode="json")
+        for role in ("verification_evidence", "contradiction_evidence"):
+            materialized = []
+            for index, selection in enumerate(getattr(validated, role)):
+                if selection.source_id in self._reads and (
+                        selection.source_id not in self._sources or self._read_urls.get(selection.source_id) !=
+                        canonical_url(str(self._sources[selection.source_id].url))):
+                    raise ValueError("Authorized read source identity changed")
+                evidence = resolve_selection(selection.source_id, selection.span_id,
+                    self._reads, self._seen_spans, [role, index, "span_id"],
+                    known_source_ids=set(self._sources))
+                materialized.append(VerificationEvidence(**evidence.model_dump()).model_dump(mode="json"))
+            data[role] = materialized
+        # Content-addressed runtime identity follows the project's deterministic hash convention.
+        encoded = json.dumps(["verification-v1", data], ensure_ascii=False, sort_keys=True,
+                             separators=(",", ":")).encode("utf-8")
+        return VerificationResult(verification_id="V-" + hashlib.sha256(encoded).hexdigest(), **data)
+
     def execute_tool_call(self, call: NativeToolCall, *, max_chars: int = 8000) -> ToolObservation:
         """Execute one explicit search/read request and stop at investigation material.
 
@@ -145,4 +190,15 @@ class FactChecker:
         result = self.tools.read_source(source.model_copy(deep=True), max_chars)
         if not isinstance(result, ToolObservation) or result.kind != "source" or result.source_id != request.source_id:
             raise ValueError("Read must return a source ToolObservation matching the requested source_id")
+        if (len(result.sources) != 1 or result.sources[0].source_id != request.source_id or
+                canonical_url(str(result.sources[0].url)) != canonical_url(str(source.url))):
+            raise ValueError("Read metadata must match the requested source identity")
+        read = make_spans(request.source_id, result.text[:max_chars],
+                          result.truncated or len(result.text) > max_chars)
+        if not read.spans:
+            raise ValueError("Read contains no canonical investigation material")
+        self._reads[request.source_id] = read
+        self._read_urls[request.source_id] = canonical_url(str(source.url))
+        for span_id in read.spans:
+            self._seen_spans[span_id] = (read.source_id, read.source_version)
         return result

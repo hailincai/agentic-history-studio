@@ -5,6 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 from history_studio.model_io import ModelResponse, Usage
+from history_studio.research.spans import make_spans
 from history_studio.verification import FactChecker, InvestigationOutcome, InvestigationStopReason
 from test_fact_checker_decision import input_context
 from test_fact_checker_dispatch import RecordingTools, native
@@ -51,7 +52,11 @@ def test_search_read_reason_preserves_boundaries_and_current_observation(tmp_pat
     for request, observation in zip(provider.requests[1:], outcome.observations):
         state = json.loads(request.input)
         assert state["verification_context"] == original.model_dump(mode="json")
-        assert state["current_observation"] == observation.model_dump(mode="json", exclude={"usage"})
+        expected = observation.model_dump(mode="json", exclude={"usage"})
+        if observation.kind == "source":
+            expected["text"] = ""
+            expected.update(make_spans(observation.source_id, observation.text, observation.truncated).observation())
+        assert state["current_observation"] == expected
         assert set(state) == {"verification_context", "current_observation", "observation_role"}
     assert all(r.tool_choice == "required" and r.max_output_tokens == 256 for r in provider.requests)
     assert checker.prepare() == prepared and original.model_dump_json() == before

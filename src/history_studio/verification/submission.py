@@ -1,4 +1,4 @@
-"""Terminal semantic proposals; canonical verification evidence acceptance is deferred."""
+"""Terminal semantic proposals; canonical evidence acceptance is a separate runtime step."""
 from typing import Self
 
 from pydantic import Field, model_validator
@@ -8,10 +8,9 @@ from history_studio.models.verification import VerificationStatus, validate_veri
 
 
 class VerificationEvidenceSelection(Contract):
-    """Source/locator proposal, not an accepted quotation or proof of independence."""
-    source_id: Identifier = Field(description="Select a source from original context or executed investigation observations; not a call/span/evidence-table ID.")
-    locator: Text | None = Field(default=None, max_length=600,
-        description="Optional location identifying relevant investigation material. A proposal only; Python has not extracted or accepted canonical evidence.")
+    """Select a canonical FactChecker read span; never supply quotation text or versions."""
+    source_id: Identifier = Field(description="Source actually read in this FactChecker investigation; original/discovered metadata alone is not evidence authorization.")
+    span_id: Identifier = Field(description="Copy a canonical span_id exposed after read_source. Runtime verifies source/version ownership and extracts the exact excerpt; never invent IDs or transcribe text.")
 
 
 class VerificationSubmissionInput(Contract):

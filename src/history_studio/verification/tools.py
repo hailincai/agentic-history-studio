@@ -15,12 +15,12 @@ def investigation_tools() -> list[dict]:
          "Read a selected source to investigate the target atomic claim only. Evaluate support, "
          "contradiction, or qualification. Returned text is candidate investigation material, "
          "not automatically accepted VerificationEvidence. The Agent will select evidence; "
-         "Python will later validate/extract canonical provenance."),
+         "Python will validate/extract canonical provenance from selected read spans."),
         ("submit_verification", VerificationSubmissionInput,
          "Terminally submit your semantic verification judgment for the target atomic claim only. "
-         "Select supporting/contradicting known sources and optional locators; assess independence, "
+         "Select supporting/contradicting source_id/span_id from canonical FactChecker reads; assess independence, "
          "uncertainty and rationale. These are evidence proposals, not accepted canonical evidence. "
-         "Do not supply target identity or excerpt text. Runtime binds the claim and stops; this is not an external tool."),
+         "Do not supply target identity, locator prose, versions or excerpt text. Runtime binds the claim and stops; separate finalization authenticates and extracts evidence. This is not an external tool."),
     )
     return [{"type": "function", "name": name, "description": description, "strict": True,
              "parameters": strict_schema(contract.model_json_schema())}

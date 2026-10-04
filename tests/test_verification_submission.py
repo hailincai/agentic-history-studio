@@ -18,8 +18,8 @@ def payload(status="UNVERIFIED", source_id="SRC-A"):
     support = status in {"VERIFIED", "PARTIALLY_VERIFIED", "DISPUTED"}
     conflict = status in {"DISPUTED", "REJECTED"}
     return dict(status=status,
-        verification_evidence=[dict(source_id=source_id, locator="Section 2")] if support else [],
-        contradiction_evidence=[dict(source_id=source_id, locator=None)] if conflict else [],
+        verification_evidence=[dict(source_id=source_id, span_id="SPAN-proposal")] if support else [],
+        contradiction_evidence=[dict(source_id=source_id, span_id="SPAN-proposal")] if conflict else [],
         unresolved_issues=["Insufficient independent material"] if status in {"UNVERIFIED", "PARTIALLY_VERIFIED"} else [],
         independence_note="Underlying origin remains an Agent assessment", rationale="Concise judgment")
 
@@ -64,7 +64,7 @@ def test_status_structure_rejects_invalid_proposals(status, changed):
 
 def test_partial_with_contradiction_and_no_unresolved_issue_is_valid():
     data = payload("PARTIALLY_VERIFIED")
-    data.update(unresolved_issues=[], contradiction_evidence=[dict(source_id="SRC-A")])
+    data.update(unresolved_issues=[], contradiction_evidence=[dict(source_id="SRC-A", span_id="SPAN-proposal")])
     assert FactChecker(input_context()).submit_verification(terminal(data)).status.value == "PARTIALLY_VERIFIED"
 
 
@@ -108,7 +108,7 @@ def test_identity_override_and_malformed_semantic_fields_rejected(field, value):
         FactChecker(input_context()).submit_verification(terminal(data))
 
 
-@pytest.mark.parametrize("override", [dict(excerpt="invented quote"), dict(span_id="SPAN-invented"),
+@pytest.mark.parametrize("override", [dict(excerpt="invented quote"), dict(locator="invented prose"),
                                      dict(source_version="VER-invented"), dict(source_id="../bad")])
 def test_model_cannot_supply_canonical_evidence(override):
     data = payload("VERIFIED")
@@ -191,6 +191,9 @@ def test_final_model_request_exposes_strict_terminal_schema_and_no_runtime_ident
     schema = body["tools"][-1]["parameters"]
     assert set(schema["properties"]) == set(VerificationSubmissionInput.model_fields)
     assert not {"claim_snapshot", "research_fact_id", "verification_id"} & set(schema["properties"])
+    selection = schema["$defs"]["VerificationEvidenceSelection"]
+    assert set(selection["properties"]) == {"source_id", "span_id"}
+    assert set(selection["required"]) == {"source_id", "span_id"}
     def inspect(node):
         if isinstance(node, dict):
             if "$ref" in node:

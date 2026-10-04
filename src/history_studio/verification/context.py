@@ -3,6 +3,7 @@ import json
 
 from history_studio.models.verification_context import VerificationContext
 from history_studio.research.boundaries import ToolObservation
+from history_studio.research.spans import SourceSpans
 
 
 MAX_OBSERVATION_CHARS = 12000
@@ -39,11 +40,12 @@ Insufficient evidence is not REJECTED.
 Preparation performs no investigation. A decision turn requests only a possible next action,
 not a VerificationResult or verdict. A requested tool call does not execute or accept evidence.
 When sufficient claim-specific investigation supports a judgment, choose submit_verification
-with status, proposed supporting/contradicting source selections and optional locators,
+with status, proposed supporting/contradicting source_id/span_id selections,
 unresolved issues, independence_note, and rationale. Runtime binds the target fact and stops.
-Selections must use known source IDs from original context or executed investigation results.
-Do not supply claim identity, excerpts, versions, or invented span IDs. Submission is a semantic
-proposal, not accepted canonical evidence or a final VerificationResult. Original research
+Selections must identify canonical spans from sources read in this FactChecker investigation.
+Read observations expose spans and source_version; select source_id/span_id, never a free-text
+locator, claim identity, excerpt, or replacement version. Submission is a semantic
+proposal until separate Runtime finalization validates and extracts each selection. Original research
 provenance alone does not establish independent support.
 """
 
@@ -63,12 +65,17 @@ def serialize_context(context: VerificationContext) -> str:
         ensure_ascii=False, separators=(",", ":"))
 
 
-def serialize_observation_context(context: VerificationContext, observation: ToolObservation) -> str:
+def serialize_observation_context(context: VerificationContext, observation: ToolObservation,
+                                  canonical_read: SourceSpans | None = None) -> str:
     """Reconstruct one turn; bound the complete observation without altering source text/IDs."""
     if not isinstance(observation, ToolObservation):
         raise TypeError("Follow-up requires one ToolObservation")
     validated = ToolObservation.model_validate(observation.model_dump(mode="json"))
     payload = validated.model_dump(mode="json", exclude={"usage"})
+    if canonical_read is not None:
+        # Whole spans replace duplicate page text in model input, not in the tool result.
+        payload["text"] = ""
+        payload.update(canonical_read.observation())
     encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     if len(encoded) > MAX_OBSERVATION_CHARS:
         raise ValueError("Observation exceeds model-input character limit")

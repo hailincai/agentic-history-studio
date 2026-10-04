@@ -87,7 +87,7 @@ def test_tool_descriptions_keep_independence_and_claim_boundary_explicit():
         assert "VerificationEvidence" in description
         assert "checkpoint_research" not in description
     assert "not automatically accepted" in read
-    assert "Agent will select evidence" in read and "Python will later validate/extract" in read
+    assert "Agent will select evidence" in read and "Python will validate/extract" in read
 
 
 def test_definition_results_are_detached_and_no_tools_is_backward_compatible():
