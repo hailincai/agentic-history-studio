@@ -51,7 +51,7 @@ def show_status(path: Path, config: ProjectConfig, state: RuntimeState) -> None:
     store = ArtifactStore(path)
     print("Latest artifact versions:")
     found = False
-    for artifact_type in ("research", "facts", "story", "script", "storyboard", "approvals"):
+    for artifact_type in ("research", "verification", "facts", "story", "script", "storyboard", "approvals"):
         versions = store.list_versions(artifact_type)
         if versions:
             found = True
@@ -111,6 +111,9 @@ def main(argv: list[str] | None = None) -> int:
     research = commands.add_parser("research", help="Run/resume autonomous research (paid API calls)")
     research.add_argument("project_id")
     research.add_argument("--config", type=Path, help="JSON RunConfiguration; no secrets")
+    verify = commands.add_parser("verify", help="Run/resume Fact Checking (paid API calls)")
+    verify.add_argument("project_id")
+    verify.add_argument("--config", type=Path, help="Existing JSON RunConfiguration; provider settings are reused")
     args = parser.parse_args(argv)
     try:
         path = project_path(args.projects_dir, args.project_id)
@@ -122,6 +125,8 @@ def main(argv: list[str] | None = None) -> int:
                 show_status(path, config, state)
             elif args.command == "research":
                 return run_research(path, config, args.config)
+            elif args.command == "verify":
+                return run_verification(path, config, args.config)
             elif args.command == "review":
                 review(path, args.stage)
             elif state.current_state == ProjectState.COMPLETE:
@@ -131,7 +136,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Last successful state: {state.last_successful_state}")
                 if state.latest_error:
                     print(f"Latest error: {state.latest_error}")
-                print("Resume is read-only. Use research <project-id> to continue a research run.")
+                command = "verify" if ProjectStateMachine(state).resume_state == ProjectState.FACT_CHECKING else "research"
+                print(f"Resume is read-only. Use {command} <project-id> to continue the stage.")
     except (OSError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
@@ -160,3 +166,48 @@ def run_research(path: Path, project: ProjectConfig, config_path: Path | None) -
         client.close()
     return {ResearchRunStatus.COMPLETE: 0, ResearchRunStatus.LIMIT_REACHED: 2,
             ResearchRunStatus.FAILED: 1}.get(package.progress.status, 1)
+
+
+def run_verification(path: Path, project: ProjectConfig, config_path: Path | None) -> int:
+    from history_studio.openai_model import OpenAIModelProvider
+    from history_studio.research.openai_provider import RunConfiguration, OpenAIWebTools, create_client
+    from history_studio.verification import FactCheckingRunner
+    from history_studio.workflow.fact_checking import FactCheckingWorkflow
+
+    saved = path / ".runtime/research_config.json"
+    effective = config_path or (saved if saved.exists() else None)
+    try:
+        configuration = (RunConfiguration.model_validate_json(effective.read_text(encoding="utf-8"))
+                         if effective else RunConfiguration())
+    except ValueError as exc:
+        raise ValueError("Invalid verification provider configuration; credentials belong only in the environment") from exc
+    client = None
+    def get_client():
+        nonlocal client
+        if client is None:
+            client = create_client(configuration.provider)
+        return client
+    provider = configuration.provider
+    runner = FactCheckingRunner(
+        provider_factory=lambda context: OpenAIModelProvider(get_client(), provider.model,
+            provider.input_usd_per_million, provider.output_usd_per_million),
+        tools_factory=lambda context: OpenAIWebTools(get_client(), provider))
+    try:
+        outcome = FactCheckingWorkflow(runner).run(project, ArtifactStore(path))
+    finally:
+        if client is not None:
+            client.close()
+    if outcome.state.current_state == ProjectState.WAITING_FACT_APPROVAL:
+        if outcome.stage is None:
+            print("Verification already awaits human fact approval; no stage execution.")
+        else:
+            print(f"Verification complete: {outcome.stage.completed_count} facts checkpointed this invocation; "
+                  f"verification_v{outcome.stage.verification_version}; WAITING_FACT_APPROVAL")
+        return 0
+    print(f"Verification stopped: {outcome.state.latest_error}; FAILED")
+    if outcome.stage is not None:
+        print(f"Completed this invocation: {outcome.stage.completed_count}; "
+              f"pending facts: {len(outcome.stage.package.pending_fact_ids)}")
+        if outcome.stage.failure_phase is not None:
+            print(f"Failure phase: {outcome.stage.failure_phase}; error type: {outcome.stage.error_type}")
+    return 2 if outcome.stage and outcome.stage.stop_reason.value == "LIMIT_REACHED" else 1
