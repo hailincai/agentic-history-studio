@@ -138,6 +138,8 @@ class FactChecker:
             if read != make_spans(read.source_id, read.text, read.truncated):
                 raise ValueError("Canonical investigation material is unavailable or invalid")
         data = validated.model_dump(mode="json")
+        # Snapshot identity belongs to Runtime, never to the Agent's semantic proposal.
+        data["research_input_ref"] = self._context.research_input_ref.model_dump(mode="json")
         for role in ("verification_evidence", "contradiction_evidence"):
             materialized = []
             for index, selection in enumerate(getattr(validated, role)):

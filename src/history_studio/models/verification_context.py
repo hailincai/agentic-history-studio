@@ -4,6 +4,7 @@ from typing import Literal, Self
 from pydantic import Field, model_validator
 
 from .base import Contract, require_unique
+from .artifact_reference import ArtifactReference
 from .research import ResearchFact
 from .research_package import ResearchPackage
 from .sources import SourceReference
@@ -16,6 +17,8 @@ class VerificationContext(Contract):
     This is a one-fact projection, not a byte/token budget or an investigation result.
     """
 
+    research_input_ref: ArtifactReference = Field(
+        description="Runtime-owned exact persisted research snapshot; not Agent-selected evidence.")
     target_fact: ResearchFact
     sources: list[SourceReference] = Field(default_factory=list)
     investigation_boundary: Literal["TARGET_CLAIM_ONLY"] = "TARGET_CLAIM_ONLY"
@@ -25,6 +28,8 @@ class VerificationContext(Contract):
 
     @model_validator(mode="after")
     def required_source_metadata(self) -> Self:
+        if self.research_input_ref.artifact_type != "research":
+            raise ValueError("Verification input must reference a research artifact")
         require_unique([source.source_id for source in self.sources], "Context source IDs")
         required = {e.source_id for e in self.target_fact.evidence}
         included = {s.source_id for s in self.sources}
@@ -35,12 +40,17 @@ class VerificationContext(Contract):
         return self
 
 
-def build_verification_context(package: ResearchPackage, research_fact_id: str) -> VerificationContext:
+def build_verification_context(package: ResearchPackage, research_fact_id: str, *,
+                               research_input_ref: ArtifactReference) -> VerificationContext:
     """Select one fact and its evidence sources in package order, with detached input data.
 
     Check lookup integrity even if a caller mutated a previously validated package.
+    Runtime must supply the reference of the version it loaded; contents cannot identify it.
     No original evidence is converted into VerificationEvidence or accepted as independent.
     """
+    reference = ArtifactReference.model_validate(research_input_ref.model_dump(mode="json"))
+    if reference.project_id != package.project_id:
+        raise ValueError("Research snapshot project_id must match ResearchPackage")
     matches = [fact for fact in package.facts if fact.fact_id == research_fact_id]
     if not matches:
         raise ValueError("Target research_fact_id not found in ResearchPackage")
@@ -51,6 +61,7 @@ def build_verification_context(package: ResearchPackage, research_fact_id: str) 
     sources = [source for source in package.sources if source.source_id in required]
     # Reparse serialized values so nested lists/models do not alias durable package objects.
     return VerificationContext.model_validate({
+        "research_input_ref": reference.model_dump(mode="json"),
         "target_fact": target.model_dump(mode="json"),
         "sources": [source.model_dump(mode="json") for source in sources],
     })

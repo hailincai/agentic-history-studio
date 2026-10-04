@@ -5,6 +5,7 @@ from typing import Self
 from pydantic import Field, field_validator, model_validator
 
 from .base import Contract, Identifier, Text
+from .artifact_reference import ArtifactReference
 from .research import EvidenceReference
 
 
@@ -53,6 +54,8 @@ class VerificationResult(Contract):
     """Evaluation of exactly one candidate claim, without modifying its ResearchFact."""
 
     verification_id: Identifier
+    research_input_ref: ArtifactReference = Field(
+        description="Exact research snapshot copied from trusted Runtime context during finalization.")
     research_fact_id: Identifier
     claim_snapshot: str = Field(min_length=1, max_length=600,
         description="Exact ResearchFact claim evaluated; preserve its text without rewriting.")
@@ -72,6 +75,8 @@ class VerificationResult(Contract):
 
     @model_validator(mode="after")
     def outcome_structure(self) -> Self:
+        if self.research_input_ref.artifact_type != "research":
+            raise ValueError("Verification input must reference a research artifact")
         validate_verification_structure(self.status, bool(self.verification_evidence),
                                         bool(self.contradiction_evidence), bool(self.unresolved_issues))
         return self

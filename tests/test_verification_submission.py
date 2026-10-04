@@ -190,7 +190,8 @@ def test_final_model_request_exposes_strict_terminal_schema_and_no_runtime_ident
     assert body["tool_choice"] == "required"
     schema = body["tools"][-1]["parameters"]
     assert set(schema["properties"]) == set(VerificationSubmissionInput.model_fields)
-    assert not {"claim_snapshot", "research_fact_id", "verification_id"} & set(schema["properties"])
+    assert not {"claim_snapshot", "research_fact_id", "verification_id", "research_input_ref"} & set(schema["properties"])
+    assert "research_input_ref" not in json.dumps(schema)
     selection = schema["$defs"]["VerificationEvidenceSelection"]
     assert set(selection["properties"]) == {"source_id", "span_id"}
     assert set(selection["required"]) == {"source_id", "span_id"}

@@ -78,7 +78,7 @@ FactChecker uses the generic boundary directly and supplies verification instruc
 
 ## FactChecker: one claim, bounded investigation
 
-One atomic `ResearchFact` projects to one `VerificationContext` and eventually one `VerificationResult`. `build_verification_context(package, research_fact_id)` selects a detached target fact plus exactly the source records referenced by its evidence. The contract enforces `TARGET_CLAIM_ONLY` and forbids whole-topic research.
+One atomic `ResearchFact` projects to one `VerificationContext` and eventually one `VerificationResult`. `build_verification_context(package, research_fact_id, research_input_ref=...)` selects a detached target fact plus exactly the source records referenced by its evidence. The contract enforces `TARGET_CLAIM_ONLY` and forbids whole-topic research.
 
 The single-turn APIs remain independently callable; the investigation API composes them:
 
@@ -308,3 +308,13 @@ There is no distributed lock, exactly-once provider execution, or cross-file tra
 Implemented: typed project/state/artifact infrastructure, human approval records, autonomous research, source-span evidence and carry-forward, lexical retrieval, cumulative budgets/checkpoints/resume, verification contracts and one-claim projection, generic model transport, and FactChecker decision/dispatch/observation-follow-up APIs composed into bounded autonomous investigation with terminal semantic submission and explicit canonical evidence finalization.
 
 Planned: integrated FactChecker persistence/resume/workflow transitions and human approval application. Human fact approval application and downstream Story Architect, script, visual/media generation, assembly, and publishing remain planned; downstream data contracts already exist. Hybrid/vector retrieval is also deferred.
+
+### Research snapshot lineage
+
+**Decision:** Runtime supplies a required immutable `ArtifactReference(project_id, artifact_type, version)` when projecting a persisted research snapshot into `VerificationContext`. The Agent submits semantic judgments and evidence selections, without snapshot identity. Runtime finalization copies `research_input_ref` from its detached context into `VerificationResult` and includes it in the existing `verification-v1` SHA-256 canonical payload.
+
+**Why:** A fact ID and exact claim can remain identical in research v3 and v4. They identify the target and assertion, but do not identify which input package was investigated. `schema_version` describes the data format, not the stored artifact version.
+
+**Invariant:** Persisted ResearchPackage (project + artifact type + version) → VerificationContext → FactChecker investigation → semantic VerificationSubmission → Runtime finalization → VerificationResult retaining that exact snapshot reference. Runtime selects the snapshot; the Agent cannot override it.
+
+**Current implementation:** The builder requires an explicit reference and checks project/type binding; it never infers a version from content. ArtifactStore retains its immutable version semantics. The reference is required, with no fabricated legacy fallback; durable verification persistence is not yet implemented. This binding is a prerequisite for later VerificationPackage membership and resume orchestration, neither implemented here.

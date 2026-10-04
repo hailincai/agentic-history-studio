@@ -7,7 +7,7 @@ from history_studio.models import build_verification_context
 from history_studio.research.boundaries import ToolObservation
 from history_studio.verification import FactChecker
 from test_fact_checker_decision import FakeModelProvider
-from test_verification_context import package_data, source_data
+from test_verification_context import research_ref, package_data, source_data
 from history_studio.models.sources import SourceReference
 
 
@@ -38,7 +38,7 @@ def native(name="search_web", arguments=None, call_id="call-correlation"):
 
 
 def checker_with_tools():
-    context = build_verification_context(package_data(), "RF-target")
+    context = build_verification_context(package_data(), "RF-target", research_input_ref=research_ref())
     tools = RecordingTools()
     provider = FakeModelProvider(RuntimeError("Dispatch must not call the model"))
     return FactChecker(context, tools=tools, provider=provider), tools, provider
@@ -67,7 +67,7 @@ def test_read_validates_once_resolves_metadata_and_preserves_observation():
     assert len(tools.calls) == 1
     kind, source, limit = tools.calls[0]
     assert kind == "read" and source["source_id"] == "SRC-A" and limit == 321
-    expected = build_verification_context(package_data(), "RF-target")
+    expected = build_verification_context(package_data(), "RF-target", research_input_ref=research_ref())
     assert source == next(s.model_dump(mode="json") for s in expected.sources if s.source_id == "SRC-A")
     assert result is tools.read_result and result.text == "Candidate source text." and result.truncated
     assert provider.requests == [] and checker.prepare() == prepared
@@ -108,7 +108,7 @@ def test_invalid_calls_never_execute_tools_or_provider(name, arguments, error, m
 
 
 def test_no_tools_and_multiple_call_input_fail_clearly():
-    context = build_verification_context(package_data(), "RF-target")
+    context = build_verification_context(package_data(), "RF-target", research_input_ref=research_ref())
     with pytest.raises(RuntimeError, match="configured ResearchTools"):
         FactChecker(context).execute_tool_call(native())
     checker, tools, provider = checker_with_tools()

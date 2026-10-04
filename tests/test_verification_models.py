@@ -15,6 +15,7 @@ def evidence_data(text="A dated record supports the claim."):
 
 def result_data(status="VERIFIED", **changes):
     return dict(verification_id="VR-1", research_fact_id="RF-1",
+                research_input_ref=dict(project_id="test", artifact_type="research", version=1),
                 claim_snapshot="The record dates the event to 701.", status=status,
                 verification_evidence=[evidence_data()],
                 independence_note="The record was independently examined; independence is a semantic assessment.",

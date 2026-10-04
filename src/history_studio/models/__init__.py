@@ -1,3 +1,4 @@
+from .artifact_reference import ArtifactReference
 from .facts import FactStatus, VerifiedFact
 from .verification import VerificationEvidence, VerificationResult, VerificationStatus
 from .verification_context import VerificationContext, build_verification_context
@@ -11,6 +12,7 @@ from .story import StoryBeat, StoryPlan
 from .storyboard import GenerationMethod, Shot, Storyboard
 
 __all__ = [
+    "ArtifactReference",
     "VerificationContext", "build_verification_context",
     "VerificationEvidence", "VerificationResult", "VerificationStatus",
     "EvidenceReference", "HistoricalTime", "TimePrecision", "ResearchGap", "ResearchPackage",

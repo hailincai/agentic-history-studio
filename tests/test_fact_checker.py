@@ -7,7 +7,7 @@ from history_studio.models import VerificationContext, build_verification_contex
 from history_studio.models.verification import VerificationEvidence, VerificationResult
 from history_studio.verification import FactChecker
 from history_studio.verification.context import INSTRUCTIONS, build_context
-from test_verification_context import package_data
+from test_verification_context import research_ref, package_data
 
 
 def decode(prepared):
@@ -17,7 +17,7 @@ def decode(prepared):
 
 def test_prepare_one_claim_preserves_complete_original_input():
     package = package_data()
-    context = build_verification_context(package, "RF-target")
+    context = build_verification_context(package, "RF-target", research_input_ref=research_ref())
     prepared = FactChecker(context).prepare()
     state = decode(prepared)
     assert state == context.model_dump(mode="json")
@@ -48,7 +48,7 @@ def test_preparation_requires_only_context_and_never_executes_provider(monkeypat
     def forbidden(*args, **kwargs):
         pytest.fail("Preparation must not execute a provider/model request")
     monkeypatch.setattr(Responses, "create", forbidden)
-    context = build_verification_context(package_data(), "RF-target")
+    context = build_verification_context(package_data(), "RF-target", research_input_ref=research_ref())
     detached = VerificationContext.model_validate_json(context.model_dump_json())
     checker = FactChecker(detached)
     assert decode(checker.prepare())["target_fact"]["fact_id"] == "RF-target"
@@ -57,7 +57,7 @@ def test_preparation_requires_only_context_and_never_executes_provider(monkeypat
 
 
 def test_preparation_is_deterministic_detached_and_creates_no_verification_data():
-    context = build_verification_context(package_data(), "RF-target")
+    context = build_verification_context(package_data(), "RF-target", research_input_ref=research_ref())
     before = context.model_dump_json()
     checker = FactChecker(context)
     prepared = checker.prepare()
@@ -72,7 +72,7 @@ def test_preparation_is_deterministic_detached_and_creates_no_verification_data(
 
 
 def test_nested_broken_provenance_is_rejected_before_agent_preparation():
-    context = build_verification_context(package_data(), "RF-target")
+    context = build_verification_context(package_data(), "RF-target", research_input_ref=research_ref())
     context.sources.clear()
     with pytest.raises(ValidationError, match="Missing source metadata"):
         FactChecker(context)

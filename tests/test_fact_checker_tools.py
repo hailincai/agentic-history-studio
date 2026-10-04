@@ -12,13 +12,13 @@ from history_studio.research.openai_provider import native_tools
 from history_studio.verification import FactChecker
 from history_studio.verification.context import INSTRUCTIONS
 from test_research_agent import FakeTools, SOURCE
-from test_verification_context import package_data
+from test_verification_context import research_ref, package_data
 
 
 def context_data():
     # Only the already-projected context crosses the Agent boundary.
     return VerificationContext.model_validate_json(
-        build_verification_context(package_data(), "RF-target").model_dump_json())
+        build_verification_context(package_data(), "RF-target", research_input_ref=research_ref()).model_dump_json())
 
 
 def test_shared_fake_dependencies_are_injected_without_execution_or_model_calls(monkeypatch):
