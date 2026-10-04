@@ -21,8 +21,7 @@ def read_project(path: Path) -> tuple[ProjectConfig, RuntimeState]:
         raise ValueError("Project configuration ID does not match its directory")
     state = RuntimeState.model_validate_json(
         (path / ".runtime" / "state.json").read_text(encoding="utf-8"))
-    if state.research_input_ref is not None:
-        state.require_research_input_ref(config.project_id)
+    state.artifacts.validate_project(config.project_id)
     return config, state
 
 
@@ -41,8 +40,12 @@ def show_status(path: Path, config: ProjectConfig, state: RuntimeState) -> None:
     print(config.model_dump_json(indent=2))
     print(f"Workflow state: {state.current_state}")
     print(f"Last successful state: {state.last_successful_state}")
-    if state.research_input_ref is not None:
-        print(f"Completed research snapshot: {state.research_input_ref.project_id}/research:v{state.research_input_ref.version}")
+    if state.artifacts.research is not None:
+        print(f"Completed research snapshot: {state.artifacts.research.project_id}/research:v{state.artifacts.research.version}")
+    for field in type(state.artifacts).model_fields:
+        reference = getattr(state.artifacts, field)
+        if reference is not None and field != "research":
+            print(f"Bound {field} snapshot: {reference.project_id}/{reference.artifact_type}:v{reference.version}")
     if state.failed_state is not None:
         print(f"Failed state: {state.failed_state}")
     if state.latest_error:

@@ -1,7 +1,7 @@
 """Workflow position around the existing completed-fact runner; no verdict policy."""
 from pydantic import Field
 
-from history_studio.models import ProjectConfig, VerificationPackage, create_verification_package
+from history_studio.models import ArtifactReference, ProjectConfig, VerificationPackage, create_verification_package
 from history_studio.models.base import Contract, Text
 from history_studio.models.research_package import ResearchPackage, ResearchRunStatus
 from history_studio.storage.artifact_store import ArtifactStore, write_json
@@ -70,7 +70,8 @@ class FactCheckingWorkflow:
             if durable != stage.package or not durable.is_complete:
                 raise ValueError("Human Gate requires the complete durable verification checkpoint")
             ready = ProjectStateMachine(machine.state)
-            ready.transition(S.WAITING_FACT_APPROVAL)
+            ready.complete_verification(ArtifactReference(project_id=project.project_id,
+                artifact_type="verification", version=stage.verification_version), project_id=project.project_id)
             write_json(path, ready.state, replace=True)
             return FactCheckingWorkflowOutcome(state=ready.state, stage=stage)
         except Exception as exc:

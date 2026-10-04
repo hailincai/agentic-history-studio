@@ -25,3 +25,5 @@ Thumbs.db
 
 # Local project runtime artifacts
 projects/
+
+.codex/config.toml

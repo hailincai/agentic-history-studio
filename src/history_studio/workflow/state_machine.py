@@ -7,6 +7,7 @@ from history_studio.storage.artifact_store import ArtifactStore
 
 from .approvals import ApprovalDecision, ApprovalRecord, ApprovalStage
 from .states import DURABLE_CHECKPOINTS, ProjectState as S, RuntimeState
+from .artifacts import WorkflowArtifactBindings
 
 
 class InvalidTransitionError(ValueError):
@@ -57,7 +58,7 @@ class ProjectStateMachine:
         self._state = RuntimeState(current_state=S.FAILED,
                                    last_successful_state=self.state.last_successful_state,
                                    failed_state=self.state.current_state,
-                                   research_input_ref=self.state.research_input_ref,
+                                   artifacts=self.state.artifacts,
                                    latest_error=error)
         return self.state
 
@@ -68,9 +69,19 @@ class ProjectStateMachine:
         reference = ArtifactReference.model_validate(reference.model_dump(mode="json"))
         if reference.project_id != project_id or reference.artifact_type != "research":
             raise ValueError("Research reference must identify this project's research artifact")
-        if self.state.research_input_ref is not None:
-            self.state.require_research_input_ref(project_id)
-        return self._set_state(S.RESEARCH_COMPLETE, research_input_ref=reference)
+        self.state.artifacts.validate_project(project_id)
+        return self._set_state(S.RESEARCH_COMPLETE, artifacts=self.state.artifacts.with_research(reference))
+
+    def complete_verification(self, reference: ArtifactReference, *, project_id: str) -> RuntimeState:
+        """Caller reloads the exact completed package before publishing this gate snapshot."""
+        if self.state.current_state != S.FACT_CHECKING:
+            raise InvalidTransitionError("Verification binding requires the active FACT_CHECKING stage")
+        reference = ArtifactReference.model_validate(reference.model_dump(mode="json"))
+        if reference.project_id != project_id or reference.artifact_type != "verification":
+            raise ValueError("Verification reference must identify this project's verification artifact")
+        self.state.require_research_input_ref(project_id)
+        return self._set_state(S.WAITING_FACT_APPROVAL,
+                               artifacts=self.state.artifacts.with_verification(reference))
 
     def recover(self) -> RuntimeState:
         if self.state.current_state != S.FAILED:
@@ -105,8 +116,8 @@ class ProjectStateMachine:
         store.save("approvals", record)
         return self._set_state(approved if record.decision == ApprovalDecision.APPROVED else revision)
 
-    def _set_state(self, state: S, *, research_input_ref: ArtifactReference | None = None) -> RuntimeState:
+    def _set_state(self, state: S, *, artifacts: WorkflowArtifactBindings | None = None) -> RuntimeState:
         checkpoint = state if state in DURABLE_CHECKPOINTS else self.state.last_successful_state
         self._state = RuntimeState(current_state=state, last_successful_state=checkpoint,
-            research_input_ref=research_input_ref if research_input_ref is not None else self.state.research_input_ref)
+            artifacts=artifacts if artifacts is not None else self.state.artifacts)
         return self.state

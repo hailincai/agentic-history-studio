@@ -1,10 +1,11 @@
 from enum import StrEnum
 from typing import Self
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 
 from history_studio.models.base import Contract, Text
 from history_studio.models.artifact_reference import ArtifactReference
+from .artifacts import WorkflowArtifactBindings
 
 
 class ProjectState(StrEnum):
@@ -52,23 +53,52 @@ class RuntimeState(Contract):
     last_successful_state: ProjectState = ProjectState.CREATED
     failed_state: ProjectState | None = None
     latest_error: Text | None = None
-    research_input_ref: ArtifactReference | None = None
+    artifacts: WorkflowArtifactBindings = Field(default_factory=WorkflowArtifactBindings)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_research_binding(cls, value):
+        if isinstance(value, dict) and "research_input_ref" in value:
+            value = dict(value)
+            legacy = value.pop("research_input_ref")
+            nested = value.get("artifacts", {})
+            if isinstance(nested, WorkflowArtifactBindings):
+                nested = nested.model_dump(mode="json")
+            nested = dict(nested)
+            if "research" in nested:
+                def parse(reference):
+                    return None if reference is None else ArtifactReference.model_validate(reference)
+                if parse(nested["research"]) != parse(legacy):
+                    raise ValueError("Conflicting legacy and typed research bindings")
+            nested["research"] = legacy
+            value["artifacts"] = nested
+        return value
+
+    @property
+    def research_input_ref(self) -> ArtifactReference | None:
+        """Read-only Python compatibility alias; serialization writes only artifacts."""
+        return self.artifacts.research
 
     def require_research_input_ref(self, project_id: str) -> ArtifactReference:
         """Fail closed at project-scoped provenance boundaries; never infer a legacy version."""
         if self.research_input_ref is None:
             raise ValueError("Exact completed research snapshot binding is missing; explicit reconciliation required")
-        reference = ArtifactReference.model_validate(self.research_input_ref.model_dump(mode="json"))
+        self.artifacts.validate_project(project_id)
+        reference = ArtifactReference.model_validate(self.artifacts.research.model_dump(mode="json"))
         if reference.artifact_type != "research":
             raise ValueError("Workflow research reference must identify a research artifact")
         if reference.project_id != project_id:
             raise ValueError("Research snapshot reference belongs to a different project")
         return reference
 
+    def require_verification_ref(self, project_id: str) -> ArtifactReference:
+        self.artifacts.validate_project(project_id)
+        if self.artifacts.verification is None:
+            raise ValueError("Exact completed verification snapshot binding is missing; explicit reconciliation required")
+        return ArtifactReference.model_validate(self.artifacts.verification.model_dump(mode="json"))
+
     @model_validator(mode="after")
     def consistent_snapshot(self) -> Self:
-        if self.research_input_ref is not None and self.research_input_ref.artifact_type != "research":
-            raise ValueError("Workflow research reference must identify a research artifact")
         if self.last_successful_state not in DURABLE_CHECKPOINTS:
             raise ValueError("Last successful state must be a durable checkpoint")
         if self.current_state == ProjectState.FAILED:

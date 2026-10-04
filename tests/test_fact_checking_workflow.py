@@ -59,6 +59,8 @@ def test_normal_completion_enters_stage_before_runner_and_advances_only_after_du
     assert outcome.state.current_state == S.WAITING_FACT_APPROVAL
     assert outcome.state.last_successful_state == S.WAITING_FACT_APPROVAL
     assert outcome.state.research_input_ref == research_ref(4)
+    assert outcome.state.artifacts.verification.version == 3
+    assert outcome.state.artifacts.verification.artifact_type == "verification"
     assert outcome.stage.completed_count == 3 and outcome.stage.package.is_complete
     assert outcome.stage.package == store.load("verification", 3, VerificationPackage)
     assert read_state(store) == outcome.state
@@ -105,6 +107,7 @@ def test_incomplete_or_failed_stage_uses_failed_interrupted_state_and_keeps_chec
     assert outcome.state.failed_state == S.FACT_CHECKING
     assert outcome.state.last_successful_state == S.RESEARCH_COMPLETE
     assert outcome.state.research_input_ref == research_ref(4)
+    assert outcome.state.artifacts.verification is None
     assert outcome.stage.completed_count == 1 and not outcome.stage.package.is_complete
     assert outcome.stage.package.completed_fact_ids == IDS[:1]
     assert outcome.stage.package.pending_fact_ids == IDS[1:]
@@ -139,6 +142,7 @@ def test_crash_after_final_checkpoint_recovers_without_reverification(tmp_path, 
     write = module.write_json
     def crash(path, state, **kwargs):
         if state.current_state == S.WAITING_FACT_APPROVAL:
+            assert state.artifacts.verification.version == 3
             raise KeyboardInterrupt("crash before final state publication")
         return write(path, state, **kwargs)
     monkeypatch.setattr(module, "write_json", crash)
@@ -151,6 +155,7 @@ def test_crash_after_final_checkpoint_recovers_without_reverification(tmp_path, 
     recovered = FactCheckingWorkflow(deps.runner()).run(project, store)
     assert recovered.state.current_state == S.WAITING_FACT_APPROVAL
     assert recovered.stage.completed_count == 0 and deps.contexts == [] and deps.tools == []
+    assert recovered.state.artifacts.verification.version == 3
     assert store.list_versions("verification") == [1, 2, 3]
 
 

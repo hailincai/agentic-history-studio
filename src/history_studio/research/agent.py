@@ -86,7 +86,8 @@ class ResearchAgent:
         if machine.resume_state not in (ProjectState.CREATED, ProjectState.RESEARCHING, ProjectState.RESEARCH_COMPLETE):
             raise ValueError("Research cannot run from the current workflow stage")
         reference = None
-        if machine.state.research_input_ref is not None:
+        machine.state.artifacts.validate_project(project.project_id)
+        if machine.state.artifacts.research is not None:
             reference = machine.state.require_research_input_ref(project.project_id)
             package = store.load("research", reference.version, ResearchPackage)
             if (package.project_id != project.project_id or package.topic != project.topic

@@ -219,7 +219,7 @@ projects/<project-id>/
 
 The existing ArtifactStore publishes UTF-8 JSON atomically with exclusive hard links; old versions are never overwritten. Runtime snapshots use atomic replacement. Local hard-link support (for example, NTFS) is required. Process termination can leave an ignored `.pending-*.tmp` file; power-loss durability is outside the guarantee.
 
-Successful research persists and validates its complete package **before** moving `CREATED → RESEARCHING → RESEARCH_COMPLETE`. A crash between package publication and workflow advancement is reconciled on the next invocation without another model call. Failure retains completed work, records a safe operational error code, and preserves `last_successful_state=CREATED` with `failed_state=RESEARCHING`. Intermediate research packages are durable data checkpoints, not new workflow states. Recovery retries research using the latest valid package; it does not discard earlier facts.
+Successful research persists and validates its complete package **before** moving `CREATED → RESEARCHING → RESEARCH_COMPLETE`. A crash after research publication but before its exact workflow binding requires explicit reconciliation; no version is inferred from latest artifacts. Failure retains completed work, records a safe operational error code, and preserves `last_successful_state=CREATED` with `failed_state=RESEARCHING`. Intermediate research packages are durable data checkpoints, not new workflow states. Recovery retries research using the latest valid package; it does not discard earlier facts.
 
 A corrupt latest package is skipped with an operational event, and an earlier valid checkpoint is loaded; all old files remain intact. If none is valid, the run refuses to start over. A missing, mismatched or invalid usage ledger blocks paid continuation, since discarding it could reset spending limits. An interrupted iteration still counts as attempted; transient page observations may need to be read again.
 
@@ -341,11 +341,11 @@ Planned: mid-fact FactChecker persistence/resume, downstream workflow transition
 
 ### Durable workflow research binding
 
-**Decision:** `RuntimeState.research_input_ref` is Runtime-owned provenance, not Agent output. `_checkpoint` returns an ArtifactReference built from the actual successful `ArtifactStore.save("research", package)` version. The accepted COMPLETE candidate checkpoint is the final completion artifact; its returned reference is passed directly to `complete_research` and persisted together with RESEARCH_COMPLETE in the existing `.runtime/state.json`. No later lookup of globally latest artifacts creates the binding.
+**Decision:** `RuntimeState.artifacts.research` is Runtime-owned provenance, not Agent output. `_checkpoint` returns an ArtifactReference built from the actual successful `ArtifactStore.save("research", package)` version. The accepted COMPLETE candidate checkpoint is the final completion artifact; its returned reference is passed directly to `complete_research` and persisted together with RESEARCH_COMPLETE in the existing `.runtime/state.json`. No later lookup of globally latest artifacts creates the binding.
 
 **Why:** Workflow position alone cannot identify its durable input. Research v4 and v5 may coexist, but a workflow bound to v4 must not silently switch to v5. RuntimeState contains the reference only; ArtifactStore contains the package content. Project consistency is checked at completion and project-scoped readers; references must identify research artifacts.
 
-**Invariant:** ResearchPackage publication → ArtifactStore assigns immutable version → RuntimeState.research_input_ref → RESEARCH_COMPLETE → later transitions / FAILED / recovery → same reference. Normal transitions and failure/recovery preserve it. Only explicit active research completion can establish or replace it; downstream-to-research rerun rules are not broadened. Bound completed research re-entry loads that exact version and ignores newer artifacts. Status displays the bound reference.
+**Invariant:** ResearchPackage publication → ArtifactStore assigns immutable version → RuntimeState.artifacts.research → RESEARCH_COMPLETE → later transitions / FAILED / recovery → same reference. Normal transitions and failure/recovery preserve it. Only explicit active research completion can establish or replace it; downstream-to-research rerun rules are not broadened. Bound completed research re-entry loads that exact version and ignores newer artifacts. Status displays the bound reference.
 
 **Current implementation:** The field defaults to None for pre-research and backward-readable legacy states. `require_research_input_ref(project_id)` fails closed when missing or foreign; no fake reference or legacy version is inferred. Completed legacy research without a binding requires explicit reconciliation, including interruption after successful artifact publication but before state binding. Publication and state updates are separate writes, not a cross-file transaction. Generic legacy state-machine transitions remain readable orchestration primitives, not proof of exact provenance; a downstream execution boundary must require the binding. This supplies the prerequisite for Patch M, without invoking FactCheckingRunner or integrating the Human Gate.
 
@@ -360,3 +360,80 @@ Planned: mid-fact FactChecker persistence/resume, downstream workflow transition
 **Current implementation:** `python -m history_studio verify <project-id> [--config <RunConfiguration.json>]` runs or resumes this stage. Existing provider settings/configuration are reused, while FactChecker's current 4-step/3000-output-token defaults remain unchanged; no budget policy is introduced. Live dependencies are constructed lazily, so already-complete checkpoint recovery and already-WAITING_FACT_APPROVAL invocation need no model/tool calls or client. Completion returns CLI code 0; limits return 2; other stops return 1 with bounded failure/count information, without transcripts. Status includes verification artifact versions. `resume` remains read-only and points interrupted Fact Checking to `verify`.
 
 Completed-fact resume: YES. Mid-fact resume: NO. If F1/F2 are checkpointed and F3 fails before publication, FAILED preserves interrupted FACT_CHECKING; `verify` recovers and begins F3 from scratch. If the final package is already complete but the process stopped before the state transition, re-entry reloads that checkpoint and advances without re-verification. Newer research v5 cannot replace a bound v4. Already-WAITING_FACT_APPROVAL execution is a no-op. Complete research's existing nonempty facts/sources/plan requirements remain authoritative. No automatic FACTS_APPROVED transition, approval/rejection extension, Story Architect invocation, or transcript/authorization persistence is added. Single-local-writer and separate artifact/state publication limitations remain unchanged.
+
+
+## Pipeline artifact lineage
+
+**Decision:** `RuntimeState.artifacts: WorkflowArtifactBindings` holds exact immutable
+`ArtifactReference(project_id, artifact_type, version)` snapshots. ArtifactStore
+answers which artifacts exist; bindings answer which belong to the workflow;
+ProjectState records execution position. Package contents, human approval identity,
+and transient execution state are separate responsibilities.
+
+| Boundary | Existing content contract / artifact type | Output binding | Approved binding / consumer | Execution status |
+|---|---|---|---|---|
+| Research → Fact Checking | ResearchPackage / research | research | Fact Checking consumes research | Implemented |
+| Fact Checking → Fact Review | VerificationPackage / verification | verification | Human reviews verification | Output binding implemented; review integration planned |
+| Fact Review → Story | Same VerificationPackage | verification | approved_verification → Story Architect | Approval and consumer planned |
+| Story → Story Review → Script | StoryPlan / story | story | approved_story → Script Writer | Contracts and legacy gate exist; agent execution/binding planned |
+| Script → Script Review → Storyboard | Script / script | script | approved_script → Visual Director | Contracts and legacy gate exist; agent execution/binding planned |
+| Storyboard → Storyboard Review → Media | Storyboard / storyboard | storyboard | approved_storyboard → media generation | Contract and legacy gate exist; execution/binding planned |
+| Media → Assembly → COMPLETE | No typed durable output contract yet | Not defined | Not defined | Workflow states only; execution planned |
+
+Each optional field has one meaning: the unprefixed field is the completed output
+presented to its consumer/reviewer; `approved_*` identifies the exact human-approved
+snapshot. Story/script/storyboard and all approved bindings are currently reserved,
+unpopulated fields. They do not imply implemented agents or approval behavior.
+The legacy `facts`/VerifiedFact review contract is not the VerificationPackage
+review contract and must be migrated explicitly during Human Gate integration.
+
+**Lifecycle invariant:** produce → persist immutable artifact → reload/validate the
+exact returned version → atomically publish binding and next workflow state in
+`.runtime/state.json` → consume the bound reference. Human Gate integration must
+review the bound target, validate it, and publish the same exact approved reference
+with the APPROVED state; never infer either identity from globally latest artifacts.
+Artifact publication and state publication are separate writes, not a cross-file
+transaction. Research binds the actual accepted publication version; Fact Checking
+reloads the runner's exact complete version and publishes verification together with
+WAITING_FACT_APPROVAL. Partial/failed verification creates no new review binding.
+An interrupted completed verification checkpoint is recoverable through the existing
+exact-input-filtered runner scan without model calls.
+
+Bindings are frozen, extra fields are forbidden, field artifact types are validated,
+and populated references must share a project. Project-scoped runtime boundaries
+validate against ProjectConfig/directory identity. Explicit stage completion uses
+`complete_research` / `complete_verification`; ordinary transitions, FAILED, and
+recovery retain every binding. Missing legacy bindings remain missing and provenance
+consumers fail closed. Generic legacy transitions and Phase 1 approval primitives
+remain orchestration infrastructure, not proof that these new lineage invariants
+have been enforced at unimplemented boundaries.
+
+**Replacement:** downstream states cannot transition back into research. Existing
+human rejection can re-enter its own generating stage. Explicit changed research
+completion clears all dependent bindings; changed verification completion preserves
+research but clears approval and later-stage bindings. Rebinding the identical
+reference preserves lineage. Future story/script/storyboard completion must apply
+the same suffix-invalidation rule; no new rerun policy is introduced here.
+
+**Legacy policy:** an explicit serialized `research_input_ref` structurally migrates
+to `artifacts.research`; conflicting old/new values are rejected. No other reference
+is synthesized. New serialization writes only `artifacts`; the old Python property
+is a read-only compatibility alias. `require_research_input_ref(project_id)` remains
+the authoritative established guard, now backed by typed bindings. A legacy waiting
+gate can be displayed/idempotently observed without fabricating verification identity;
+future Fact Review execution must require the exact verification binding.
+
+**Version-discovery audit:** research's unbound newest-valid checkpoint scan is
+legitimate recovery discovery; bound completed research loads its exact version.
+Verification's reverse scan filters by the exact bound research input and validates
+membership, so it discovers matching execution checkpoints rather than changing
+workflow input. ArtifactStore version enumeration/allocation is storage infrastructure.
+CLI status/diagnostic listings are operational. CLI review's globally latest target
+and the legacy human-decision method's globally latest gate check are unsafe semantic
+selection for the new pipeline: future gate integration must consume the bound target
+and persist the approved binding. They are intentionally not redesigned here.
+
+For a new durable contract, add an explicit typed field and expected artifact type,
+bind the returned exact version with the completion state, consume only that binding,
+and bind approval separately at its Human Gate. Undefined media outputs need their
+own content contracts before introducing media lineage fields.
