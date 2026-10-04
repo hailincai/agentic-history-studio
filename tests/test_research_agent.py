@@ -336,14 +336,18 @@ def test_cannot_drop_a_critical_gap_to_complete(tmp_path: Path) -> None:
     assert package.plan.gaps[0].status == "OPEN"
 
 
-def test_crash_after_complete_package_before_workflow_is_reconciled(tmp_path: Path) -> None:
+def test_unbound_complete_package_requires_explicit_reconciliation(tmp_path: Path) -> None:
     project, store = setup_run(tmp_path)
     package = ResearchAgent(FakeProvider(calls()), FakeTools(), settings()).run(project, store)
     write_json(store.project_dir / ".runtime/state.json", RuntimeState(current_state=S.RESEARCHING,
         last_successful_state=S.CREATED), replace=True)
     provider = FakeProvider([])
-    assert ResearchAgent(provider, FakeTools(), settings()).run(project, store) == package
-    assert state(store).current_state == S.RESEARCH_COMPLETE
+    before = state(store)
+    with pytest.raises(ValueError, match="binding is missing"):
+        ResearchAgent(provider, FakeTools(), settings()).run(project, store)
+    assert state(store) == before
+    assert state(store).research_input_ref is None
+    assert store.load_latest("research", ResearchPackage) == package
     assert provider.calls == 0
 
 

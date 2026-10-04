@@ -116,7 +116,8 @@ def test_legacy_load_and_resume_do_not_invent_coverage_or_grant_completion(tmp_p
     provider = FakeProvider([RuntimeError("offline stop")])
     runner = ResearchAgent(provider, FakeTools(), settings())
     if stored_status == "COMPLETE":
-        with pytest.raises(ValueError, match="Completion requires"):
+        # M0 rejects unbound completion before semantic/coverage completion checks.
+        with pytest.raises(ValueError, match="binding is missing"):
             runner.run(project, store)
         assert provider.calls == 0
     else:

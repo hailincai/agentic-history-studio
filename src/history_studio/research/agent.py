@@ -6,6 +6,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ValidationError
 
 from history_studio.models.project import ProjectConfig
+from history_studio.models.artifact_reference import ArtifactReference
 from history_studio.models.research_package import (
     GapStatus, ResearchPackage, ResearchProgress, ResearchRunStatus,
 )
@@ -84,11 +85,24 @@ class ResearchAgent:
         machine = ProjectStateMachine(RuntimeState.model_validate_json(state_path.read_text(encoding="utf-8")))
         if machine.resume_state not in (ProjectState.CREATED, ProjectState.RESEARCHING, ProjectState.RESEARCH_COMPLETE):
             raise ValueError("Research cannot run from the current workflow stage")
-        package = self._load_package(project, store)
+        reference = None
+        if machine.state.research_input_ref is not None:
+            reference = machine.state.require_research_input_ref(project.project_id)
+            package = store.load("research", reference.version, ResearchPackage)
+            if (package.project_id != project.project_id or package.topic != project.topic
+                    or package.research_scope != project.research_scope
+                    or package.progress.status != ResearchRunStatus.COMPLETE):
+                raise ValueError("Bound research artifact must match the project's completed research")
+        else:
+            if machine.resume_state == ProjectState.RESEARCH_COMPLETE:
+                machine.state.require_research_input_ref(project.project_id)
+            package = self._load_package(project, store)
         usage_path = runtime / "research_usage.json"
         if package and package.progress.status == ResearchRunStatus.COMPLETE:
+            if reference is None:
+                machine.state.require_research_input_ref(project.project_id)
             self._check_completion(package)
-            self._finish_workflow(machine, state_path)
+            self._finish_workflow(machine, state_path, research_input_ref=reference, project_id=project.project_id)
             self.emit("Research already complete; no provider calls made")
             return package
         if machine.state.current_state == ProjectState.RESEARCH_COMPLETE:
@@ -238,7 +252,7 @@ class ResearchAgent:
                                 raise LimitReached("no_progress_limit")
                             continue
                         operation = "artifact_persistence"
-                        self._checkpoint(candidate, store)
+                        checkpoint_ref = self._checkpoint(candidate, store)
                         ledger.progress_seen = sorted(set(ledger.progress_seen) | marks)
                         ledger.consecutive_no_progress = 0
                         ledger.last_checkpoint_outcome = {"status": "checkpoint_accepted", "progress": signals,
@@ -248,7 +262,8 @@ class ResearchAgent:
                         observation = None
                         if package.progress.status == ResearchRunStatus.COMPLETE:
                             operation = "workflow_transition"
-                            self._finish_workflow(machine, state_path)
+                            self._finish_workflow(machine, state_path,
+                                research_input_ref=checkpoint_ref, project_id=project.project_id)
                             self._summary(package, ledger)
                             return package
                         break
@@ -394,19 +409,26 @@ class ResearchAgent:
         if not completion_status(package, self.settings)["can_complete"]:
             raise ValueError("Completion requires coverage, enough facts and enough cited sources")
 
-    def _checkpoint(self, package: ResearchPackage, store: ArtifactStore) -> None:
+    def _checkpoint(self, package: ResearchPackage, store: ArtifactStore) -> ArtifactReference:
         # Revalidate after mutations before making the entire package durable.
         package = ResearchPackage.model_validate(package.model_dump())
+        if package.project_id != store.project_dir.name:
+            raise ValueError("Research checkpoint project must match artifact directory")
         version = store.save("research", package)
         self.emit(f"Checkpoint research_v{version}: {len(package.facts)} facts, {len(package.sources)} sources")
+        return ArtifactReference(project_id=package.project_id, artifact_type="research", version=version)
 
-    def _finish_workflow(self, machine: ProjectStateMachine, path: Path) -> None:
+    def _finish_workflow(self, machine: ProjectStateMachine, path: Path, *,
+                         research_input_ref: ArtifactReference, project_id: str) -> None:
         if machine.state.current_state == ProjectState.FAILED:
             machine.recover()
         if machine.state.current_state == ProjectState.CREATED:
             machine.transition(ProjectState.RESEARCHING)
         if machine.state.current_state == ProjectState.RESEARCHING:
-            machine.transition(ProjectState.RESEARCH_COMPLETE)
+            machine.complete_research(research_input_ref, project_id=project_id)
+        elif (machine.state.current_state != ProjectState.RESEARCH_COMPLETE
+              or machine.state.require_research_input_ref(project_id) != research_input_ref):
+            raise ValueError("Research completion must preserve the exact published snapshot")
         write_json(path, machine.state, replace=True)
 
     def _summary(self, package: ResearchPackage, ledger: UsageLedger) -> None:

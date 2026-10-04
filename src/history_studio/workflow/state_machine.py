@@ -2,7 +2,7 @@ from typing import Annotated
 
 from pydantic import Field, RootModel
 
-from history_studio.models import Script, Storyboard, StoryPlan, VerifiedFact
+from history_studio.models import ArtifactReference, Script, Storyboard, StoryPlan, VerifiedFact
 from history_studio.storage.artifact_store import ArtifactStore
 
 from .approvals import ApprovalDecision, ApprovalRecord, ApprovalStage
@@ -57,8 +57,20 @@ class ProjectStateMachine:
         self._state = RuntimeState(current_state=S.FAILED,
                                    last_successful_state=self.state.last_successful_state,
                                    failed_state=self.state.current_state,
+                                   research_input_ref=self.state.research_input_ref,
                                    latest_error=error)
         return self.state
+
+    def complete_research(self, reference: ArtifactReference, *, project_id: str) -> RuntimeState:
+        """Bind Runtime's successfully published artifact only at research completion."""
+        if self.state.current_state != S.RESEARCHING:
+            raise InvalidTransitionError("Research binding requires the active RESEARCHING stage")
+        reference = ArtifactReference.model_validate(reference.model_dump(mode="json"))
+        if reference.project_id != project_id or reference.artifact_type != "research":
+            raise ValueError("Research reference must identify this project's research artifact")
+        if self.state.research_input_ref is not None:
+            self.state.require_research_input_ref(project_id)
+        return self._set_state(S.RESEARCH_COMPLETE, research_input_ref=reference)
 
     def recover(self) -> RuntimeState:
         if self.state.current_state != S.FAILED:
@@ -93,7 +105,8 @@ class ProjectStateMachine:
         store.save("approvals", record)
         return self._set_state(approved if record.decision == ApprovalDecision.APPROVED else revision)
 
-    def _set_state(self, state: S) -> RuntimeState:
+    def _set_state(self, state: S, *, research_input_ref: ArtifactReference | None = None) -> RuntimeState:
         checkpoint = state if state in DURABLE_CHECKPOINTS else self.state.last_successful_state
-        self._state = RuntimeState(current_state=state, last_successful_state=checkpoint)
+        self._state = RuntimeState(current_state=state, last_successful_state=checkpoint,
+            research_input_ref=research_input_ref if research_input_ref is not None else self.state.research_input_ref)
         return self.state
