@@ -12,12 +12,14 @@ from .research_package import ResearchGap, ResearchPackage, ResearchPlan, Resear
 from .script import Script, ScriptScene
 from .sources import SourceReference, SourceType
 from .story import StoryBeat, StoryPlan
+from .story_context import StoryContext, StoryContextFact, StoryPendingClaim
 from .story_package import (
     StoryFactUse, StoryFactReference, StoryNarrativeBeat, StorySection, StoryStructure, StoryPackage,
 )
 from .storyboard import GenerationMethod, Shot, Storyboard
 
 __all__ = [
+    "StoryContext", "StoryContextFact", "StoryPendingClaim",
     "StoryFactUse", "StoryFactReference", "StoryNarrativeBeat", "StorySection", "StoryStructure", "StoryPackage",
     "ArtifactReference",
     "ResearchFactSnapshot", "VerificationPackage", "create_verification_package", "add_verification_result",
