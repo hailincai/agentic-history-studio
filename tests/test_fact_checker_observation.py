@@ -39,7 +39,7 @@ def test_follow_up_preserves_original_and_current_input_without_dispatch(kind, t
     for guidance in ("previously executed", "not accepted VerificationEvidence", "relevance",
                      "contradiction", "Source IDs", "span IDs", "not automatically selected"):
         assert guidance in request.instructions
-    assert [t["name"] for t in request.tools] == ["search_web", "read_source"]
+    assert [t["name"] for t in request.tools] == ["search_web", "read_source", "submit_verification"]
     assert request.tool_choice == "required" and request.max_output_tokens == 256
     assert "checkpoint_research" not in json.dumps(request.tools)
     assert response.usage.output_tokens == 12

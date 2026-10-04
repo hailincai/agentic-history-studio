@@ -34,6 +34,21 @@ class VerificationEvidence(EvidenceReference):
     """
 
 
+def validate_verification_structure(status: VerificationStatus, supporting: bool,
+                                    conflicting: bool, unresolved: bool) -> None:
+    """Shared status shape for canonical results and explicitly unaccepted proposals."""
+    if status == VerificationStatus.VERIFIED and not supporting:
+        raise ValueError("VERIFIED requires verification evidence")
+    if status == VerificationStatus.DISPUTED and not (supporting and conflicting):
+        raise ValueError("DISPUTED requires verification and contradiction evidence")
+    if status == VerificationStatus.PARTIALLY_VERIFIED and (not supporting or not (unresolved or conflicting)):
+        raise ValueError("PARTIALLY_VERIFIED requires verification evidence and unresolved issues or contradiction evidence")
+    if status == VerificationStatus.REJECTED and not conflicting:
+        raise ValueError("REJECTED requires contradiction evidence")
+    if status == VerificationStatus.UNVERIFIED and not unresolved:
+        raise ValueError("UNVERIFIED requires an unresolved issue")
+
+
 class VerificationResult(Contract):
     """Evaluation of exactly one candidate claim, without modifying its ResearchFact."""
 
@@ -57,17 +72,6 @@ class VerificationResult(Contract):
 
     @model_validator(mode="after")
     def outcome_structure(self) -> Self:
-        supporting = bool(self.verification_evidence)
-        conflicting = bool(self.contradiction_evidence)
-        if self.status == VerificationStatus.VERIFIED and not supporting:
-            raise ValueError("VERIFIED requires verification evidence")
-        if self.status == VerificationStatus.DISPUTED and not (supporting and conflicting):
-            raise ValueError("DISPUTED requires verification and contradiction evidence")
-        if self.status == VerificationStatus.PARTIALLY_VERIFIED:
-            if not supporting or not (self.unresolved_issues or conflicting):
-                raise ValueError("PARTIALLY_VERIFIED requires verification evidence and unresolved issues or contradiction evidence")
-        if self.status == VerificationStatus.REJECTED and not conflicting:
-            raise ValueError("REJECTED requires contradiction evidence")
-        if self.status == VerificationStatus.UNVERIFIED and not self.unresolved_issues:
-            raise ValueError("UNVERIFIED requires an unresolved issue")
+        validate_verification_structure(self.status, bool(self.verification_evidence),
+                                        bool(self.contradiction_evidence), bool(self.unresolved_issues))
         return self

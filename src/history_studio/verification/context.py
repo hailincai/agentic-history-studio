@@ -38,6 +38,13 @@ UNVERIFIED means adequate claim-specific investigation leaves insufficient indep
 Insufficient evidence is not REJECTED.
 Preparation performs no investigation. A decision turn requests only a possible next action,
 not a VerificationResult or verdict. A requested tool call does not execute or accept evidence.
+When sufficient claim-specific investigation supports a judgment, choose submit_verification
+with status, proposed supporting/contradicting source selections and optional locators,
+unresolved issues, independence_note, and rationale. Runtime binds the target fact and stops.
+Selections must use known source IDs from original context or executed investigation results.
+Do not supply claim identity, excerpts, versions, or invented span IDs. Submission is a semantic
+proposal, not accepted canonical evidence or a final VerificationResult. Original research
+provenance alone does not establish independent support.
 """
 
 

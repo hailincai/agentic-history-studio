@@ -6,9 +6,11 @@ from pydantic import Field
 from history_studio.model_io import ModelResponse
 from history_studio.models.base import Contract
 from history_studio.research.boundaries import ToolObservation
+from .submission import VerificationSubmission
 
 
 class InvestigationStopReason(StrEnum):
+    SUBMITTED = "SUBMITTED"
     LIMIT_REACHED = "LIMIT_REACHED"
     MODEL_TEXT = "MODEL_TEXT"
     NO_TOOL_CALL = "NO_TOOL_CALL"
@@ -20,3 +22,4 @@ class InvestigationOutcome(Contract):
     observations: list[ToolObservation] = Field(default_factory=list)
     steps: int = Field(ge=1)
     stop_reason: InvestigationStopReason
+    submission: VerificationSubmission | None = None

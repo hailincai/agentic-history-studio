@@ -32,7 +32,7 @@ def test_shared_fake_dependencies_are_injected_without_execution_or_model_calls(
     checker = FactChecker(context, tools=tools)
     assert checker.tools is tools
     definitions = checker.tool_definitions()
-    assert [d["name"] for d in definitions] == ["search_web", "read_source"]
+    assert [d["name"] for d in definitions] == ["search_web", "read_source", "submit_verification"]
     assert tools.queries == [] and tools.reads == []
     assert checker.prepare() == FactChecker(context).prepare()
     assert checker.prepare() == checker.prepare()
@@ -79,7 +79,7 @@ def test_definitions_reuse_existing_request_schemas_and_normalization():
 
 def test_tool_descriptions_keep_independence_and_claim_boundary_explicit():
     definitions = FactChecker(context_data(), tools=FakeTools()).tool_definitions()
-    search, read = [d["description"] for d in definitions]
+    search, read = [d["description"] for d in definitions[:2]]
     assert "independent evidence" in search and "do not research the whole topic" in search
     for description in (search, read):
         assert "target atomic claim only" in description

@@ -62,7 +62,7 @@ def test_one_decision_passes_claim_only_request_and_never_executes_tools(name, a
     assert state["whole_topic_research_allowed"] is False
     assert "RF-other" not in request.input and "SRC-unrelated" not in request.input
     assert "SRC-discovered" not in request.input and "plan" not in state and "facts" not in state
-    assert [d["name"] for d in request.tools] == ["search_web", "read_source"]
+    assert [d["name"] for d in request.tools] == ["search_web", "read_source", "submit_verification"]
     assert request.tools == checker.tool_definitions()
     assert request.tool_choice == "required" and request.max_output_tokens == 256
     assert "checkpoint_research" not in json.dumps(request.model_dump())

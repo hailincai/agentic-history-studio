@@ -9,6 +9,7 @@ from .context import (INSTRUCTIONS, OBSERVATION_INSTRUCTIONS, build_context, ser
                       serialize_observation_context)
 from .tools import investigation_tools
 from .investigation import InvestigationOutcome, InvestigationStopReason
+from .submission import VerificationSubmission, VerificationSubmissionInput
 
 
 class FactChecker:
@@ -82,9 +83,32 @@ class FactChecker:
                           else InvestigationStopReason.NO_TOOL_CALL)
                 return InvestigationOutcome(final_response=response, observations=observations,
                                             steps=step, stop_reason=reason)
-            observations.append(self.execute_tool_call(response.tool_calls[0]))
+            call = response.tool_calls[0]
+            if call.name == "submit_verification":
+                submission = self.submit_verification(call)
+                return InvestigationOutcome(final_response=response, observations=observations,
+                    steps=step, stop_reason=InvestigationStopReason.SUBMITTED, submission=submission)
+            observations.append(self.execute_tool_call(call))
         return InvestigationOutcome(final_response=response, observations=observations,
                                     steps=max_steps, stop_reason=InvestigationStopReason.LIMIT_REACHED)
+
+    def submit_verification(self, call: NativeToolCall) -> VerificationSubmission:
+        """Validate one terminal semantic proposal; no external action or evidence acceptance."""
+        if not isinstance(call, NativeToolCall) or call.name != "submit_verification":
+            raise ValueError("Submission requires one submit_verification NativeToolCall")
+        try:
+            arguments = json.loads(call.arguments)
+        except json.JSONDecodeError as exc:
+            raise ValueError("Invalid submission arguments JSON") from exc
+        if not isinstance(arguments, dict):
+            raise ValueError("Submission arguments must be a JSON object")
+        proposal = VerificationSubmissionInput.model_validate(arguments)
+        if any(e.source_id not in self._sources for e in
+               [*proposal.verification_evidence, *proposal.contradiction_evidence]):
+            raise ValueError("Submission selects an unknown source")
+        return VerificationSubmission(**proposal.model_dump(),
+            research_fact_id=self._context.target_fact.fact_id,
+            claim_snapshot=self._context.target_fact.claim)
 
     def execute_tool_call(self, call: NativeToolCall, *, max_chars: int = 8000) -> ToolObservation:
         """Execute one explicit search/read request and stop at investigation material.
