@@ -89,6 +89,8 @@ class ProjectStateMachine:
         return self._set_state(self.resume_state)
 
     def apply_human_decision(self, record: ApprovalRecord, store: ArtifactStore) -> RuntimeState:
+        if record.stage == ApprovalStage.FACTS:
+            return self.apply_fact_review_decision(record, store)
         gates = {
             ApprovalStage.FACTS: (S.WAITING_FACT_APPROVAL, S.FACTS_APPROVED, S.FACT_CHECKING),
             ApprovalStage.STORY: (S.WAITING_STORY_APPROVAL, S.STORY_APPROVED, S.STORY_GENERATING),
@@ -115,6 +117,29 @@ class ProjectStateMachine:
                 raise InvalidTransitionError("This artifact version already has a decision; persist a new version")
         store.save("approvals", record)
         return self._set_state(approved if record.decision == ApprovalDecision.APPROVED else revision)
+
+    def apply_fact_review_decision(self, record: ApprovalRecord, store: ArtifactStore) -> RuntimeState:
+        """Only the human-attested, exact bound VerificationPackage can be approved."""
+        from .fact_review import load_fact_review
+        record = ApprovalRecord.model_validate(record.model_dump(mode="json"))
+        load_fact_review(self.state, store)
+        reference = self.state.require_verification_ref(store.project_dir.name)
+        if (record.stage != ApprovalStage.FACTS or record.artifact_type != "verification"
+                or record.project_id != reference.project_id or record.artifact_version != reference.version):
+            raise InvalidTransitionError("Human decision must identify the exact bound verification artifact")
+        for version in store.list_versions("approvals"):
+            previous = store.load("approvals", version, ApprovalRecord)
+            if (previous.project_id == record.project_id and previous.stage == record.stage
+                    and previous.artifact_type == record.artifact_type
+                    and previous.artifact_version == record.artifact_version):
+                raise InvalidTransitionError("This artifact version already has a decision; persist a new version")
+        data = self.state.artifacts.model_dump(mode="json")
+        data["approved_verification"] = (reference.model_dump(mode="json")
+            if record.decision == ApprovalDecision.APPROVED else None)
+        bindings = WorkflowArtifactBindings.model_validate(data)
+        store.save("approvals", record)
+        return self._set_state(S.FACTS_APPROVED if record.decision == ApprovalDecision.APPROVED
+                               else S.FACT_CHECKING, artifacts=bindings)
 
     def _set_state(self, state: S, *, artifacts: WorkflowArtifactBindings | None = None) -> RuntimeState:
         checkpoint = state if state in DURABLE_CHECKPOINTS else self.state.last_successful_state

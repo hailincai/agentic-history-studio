@@ -4,26 +4,53 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from history_studio.models import VerifiedFact, StoryPlan, Script, Storyboard
+from history_studio.models import (StoryPlan, Script, Storyboard, ArtifactReference, VerificationPackage,
+    create_verification_package, add_verification_result)
 from history_studio.storage import ArtifactStore
 from history_studio.workflow import (
-    ApprovalRecord, InvalidTransitionError, ProjectState as S, ProjectStateMachine, RuntimeState,
+    ApprovalRecord, InvalidTransitionError, ProjectState as S, ProjectStateMachine, RuntimeState, WorkflowArtifactBindings,
 )
 
 
 def record(stage: str = "facts", version: int = 1, decision: str = "APPROVED") -> ApprovalRecord:
-    return ApprovalRecord(project_id="li_bai", stage=stage, artifact_type=stage,
+    return ApprovalRecord(project_id="li_bai", stage=stage, artifact_type="verification" if stage == "facts" else stage,
                           artifact_version=version, decision=decision, decided_by="Human reviewer",
                           decision_source="human", decided_at=datetime.now(timezone.utc))
 
 
-def artifact() -> VerifiedFact:
-    return VerifiedFact(fact_id="f1", claim="claim", status="VERIFIED", confidence=1,
-                        reasoning="checked")
+def research_artifact():
+    from test_verification_package import research_data
+    from history_studio.models.research_package import ResearchPlan, ResearchPackage
+    research = research_data()
+    research.project_id = "li_bai"
+    ids = [fact.fact_id for fact in research.facts]
+    research.plan = ResearchPlan(gaps=[dict(gap_id="G1", question="What happened?",
+        completion_criteria=["Assess records"], status="COVERED", fact_ids=ids,
+        coverage_assessment=dict(criteria=[dict(criterion="Assess records", addressed=True)],
+            supporting_fact_ids=ids, rationale="Records assessed"))])
+    research.progress.status = "COMPLETE"
+    return ResearchPackage.model_validate(research.model_dump())
 
 
-def machine_at(state: S) -> ProjectStateMachine:
-    return ProjectStateMachine(RuntimeState(current_state=state, last_successful_state=state))
+def ref(kind, version=1):
+    return ArtifactReference(project_id="li_bai", artifact_type=kind, version=version)
+
+
+def artifact() -> VerificationPackage:
+    from test_verification_package import result_for
+    package = create_verification_package(research_artifact(), research_input_ref=ref("research"))
+    for index in range(len(package.research_facts)):
+        package = add_verification_result(package, result_for(package, index))
+    return package
+
+
+def machine_at(state: S, store=None, version=1) -> ProjectStateMachine:
+    bindings = WorkflowArtifactBindings()
+    if state == S.WAITING_FACT_APPROVAL and store is not None:
+        if not store.list_versions("research"):
+            store.save("research", research_artifact())
+        bindings = WorkflowArtifactBindings(research=ref("research"), verification=ref("verification", version))
+    return ProjectStateMachine(RuntimeState(current_state=state, last_successful_state=state, artifacts=bindings))
 
 
 def test_full_workflow_with_persisted_human_gates(tmp_path: Path) -> None:
@@ -31,6 +58,7 @@ def test_full_workflow_with_persisted_human_gates(tmp_path: Path) -> None:
     machine = ProjectStateMachine()
     for state in (S.RESEARCHING, S.RESEARCH_COMPLETE, S.FACT_CHECKING, S.WAITING_FACT_APPROVAL):
         machine.transition(state)
+    machine = machine_at(S.WAITING_FACT_APPROVAL, store)
     gates = [
         ("facts", S.FACTS_APPROVED, S.STORY_GENERATING, S.WAITING_STORY_APPROVAL),
         ("story", S.STORY_APPROVED, S.SCRIPT_GENERATING, S.WAITING_SCRIPT_APPROVAL),
@@ -52,7 +80,7 @@ def test_full_workflow_with_persisted_human_gates(tmp_path: Path) -> None:
                 period="Tang", generation_method="STATIC_IMAGE", camera_motion="none", prompt="river")],
                 estimated_media_cost_usd=0),
         }
-        store.save(stage, artifacts[stage])
+        store.save("verification" if stage == "facts" else stage, artifacts[stage])
         assert machine.apply_human_decision(record(stage), store).current_state == approved
         machine.transition(generating)
         machine.transition(waiting)
@@ -88,25 +116,26 @@ def test_invalid_jumps_and_failure_recovery() -> None:
 @pytest.mark.parametrize("decision", ["REJECTED", "REVISION_REQUESTED"])
 def test_rejection_preserves_version(tmp_path: Path, decision: str) -> None:
     store = ArtifactStore(tmp_path / "li_bai")
-    store.save("facts", artifact())
-    machine = machine_at(S.WAITING_FACT_APPROVAL)
+    store.save("verification", artifact())
+    machine = machine_at(S.WAITING_FACT_APPROVAL, store)
     assert machine.apply_human_decision(record(decision=decision), store).current_state == S.FACT_CHECKING
-    assert store.load("facts", 1, VerifiedFact) == artifact()
+    assert store.load("verification", 1, VerificationPackage) == artifact()
     assert store.load_latest("approvals", ApprovalRecord).decision == decision
     machine.transition(S.WAITING_FACT_APPROVAL)
     with pytest.raises(InvalidTransitionError):
         machine.apply_human_decision(record(), store)
-    store.save("facts", artifact())
+    store.save("verification", artifact())
+    machine = machine_at(S.WAITING_FACT_APPROVAL, store, version=2)
     assert machine.apply_human_decision(record(version=2), store).current_state == S.FACTS_APPROVED
 
 
 def test_gate_rejects_missing_stale_or_other_project(tmp_path: Path) -> None:
     store = ArtifactStore(tmp_path / "li_bai")
-    machine = machine_at(S.WAITING_FACT_APPROVAL)
-    with pytest.raises(InvalidTransitionError):
+    machine = machine_at(S.WAITING_FACT_APPROVAL, store, version=2)
+    with pytest.raises(FileNotFoundError):
         machine.apply_human_decision(record(), store)
-    store.save("facts", artifact())
-    store.save("facts", artifact())
+    store.save("verification", artifact())
+    store.save("verification", artifact())
     with pytest.raises(InvalidTransitionError):
         machine.apply_human_decision(record(), store)
     other = record(version=2).model_copy(update={"project_id": "other"})
@@ -118,8 +147,8 @@ def test_gate_rejects_missing_stale_or_other_project(tmp_path: Path) -> None:
 
 def test_failed_approval_write_does_not_advance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     store = ArtifactStore(tmp_path / "li_bai")
-    store.save("facts", artifact())
-    machine = machine_at(S.WAITING_FACT_APPROVAL)
+    store.save("verification", artifact())
+    machine = machine_at(S.WAITING_FACT_APPROVAL, store)
     def fail(*args: object) -> None:
         raise OSError("disk full")
     monkeypatch.setattr(store, "save", fail)
@@ -138,8 +167,8 @@ def test_inconsistent_runtime_rejected() -> None:
 def test_gate_validates_persisted_artifact_contract(tmp_path: Path) -> None:
     from history_studio.models import ProjectConfig
     store = ArtifactStore(tmp_path / "li_bai")
-    store.save("facts", ProjectConfig(project_id="li_bai", topic="topic"))
-    machine = machine_at(S.WAITING_FACT_APPROVAL)
+    store.save("verification", ProjectConfig(project_id="li_bai", topic="topic"))
+    machine = machine_at(S.WAITING_FACT_APPROVAL, store)
     with pytest.raises(ValidationError):
         machine.apply_human_decision(record(), store)
     assert machine.state.current_state == S.WAITING_FACT_APPROVAL
@@ -214,10 +243,10 @@ def test_invalid_failure_metadata(changes: dict) -> None:
 def test_approval_identity_includes_project(tmp_path: Path, previous_project: str,
                                             is_duplicate: bool) -> None:
     store = ArtifactStore(tmp_path / "li_bai")
-    store.save("facts", artifact())
+    store.save("verification", artifact())
     previous = record().model_copy(update={"project_id": previous_project})
     store.save("approvals", previous)
-    machine = machine_at(S.WAITING_FACT_APPROVAL)
+    machine = machine_at(S.WAITING_FACT_APPROVAL, store)
     if is_duplicate:
         with pytest.raises(InvalidTransitionError, match="already has a decision"):
             machine.apply_human_decision(record(), store)

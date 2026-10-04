@@ -2,7 +2,7 @@
 
 Agentic History Studio builds source-grounded historical documentaries with explicit human review. The first planned documentary is a five-minute Chinese film about Li Bai (李白).
 
-**Implemented:** project/state/artifact infrastructure, autonomous research with bounded retrieval, verification contracts, and FactChecker decisions, search/read dispatch, observation round trips, bounded autonomous investigation, and terminal semantic submission. Explicit canonical evidence acceptance, VerificationResult construction, and a versioned VerificationPackage artifact contract are implemented; completed-fact checkpointing/resume are implemented; Fact Checking workflow integration is implemented; approval application remains planned. The normal test suite is offline; the CLI `research` command makes paid requests.
+**Implemented:** project/state/artifact infrastructure, autonomous research with bounded retrieval, verification contracts, and FactChecker decisions, search/read dispatch, observation round trips, bounded autonomous investigation, and terminal semantic submission. Explicit canonical evidence acceptance, VerificationResult construction, and a versioned VerificationPackage artifact contract are implemented; completed-fact checkpointing/resume are implemented; Fact Checking workflow integration is implemented; exact Human Fact Review and approval are implemented. The normal test suite is offline; the CLI `research` command makes paid requests.
 
 ## System and responsibility boundaries
 
@@ -17,7 +17,8 @@ flowchart LR
     Checker --> Submission[VerificationSubmission: semantic proposal]
     Submission --> Acceptance[Explicit Runtime provenance acceptance]
     Acceptance --> Result[VerificationResult]
-    Result -. planned integration .-> Human[Human fact approval]
+    Result --> Verification[(VerificationPackage)]
+    Verification --> Human[Human Fact Review / exact approval]
     Human -. planned .-> Downstream[Story / script / media pipeline]
 ```
 
@@ -307,7 +308,7 @@ There is no distributed lock, exactly-once provider execution, or cross-file tra
 
 Implemented: typed project/state/artifact infrastructure, human approval records, autonomous research, source-span evidence and carry-forward, lexical retrieval, cumulative budgets/checkpoints/resume, verification contracts and one-claim projection, generic model transport, and FactChecker decision/dispatch/observation-follow-up APIs composed into bounded autonomous investigation with terminal semantic submission and explicit canonical evidence finalization, plus VerificationPackage artifacts and the completed-fact FactCheckingRunner.
 
-Planned: mid-fact FactChecker persistence/resume, downstream workflow transitions, and human approval application. Human fact approval application and downstream Story Architect, script, visual/media generation, assembly, and publishing remain planned; downstream data contracts already exist. Hybrid/vector retrieval is also deferred.
+Planned: mid-fact FactChecker persistence/resume and later-stage execution/approval integration. Exact Human Fact Review is implemented; downstream Story Architect, script, visual/media generation, assembly, and publishing remain planned; downstream data contracts already exist. Hybrid/vector retrieval is also deferred.
 
 ### Research snapshot lineage
 
@@ -359,7 +360,7 @@ Planned: mid-fact FactChecker persistence/resume, downstream workflow transition
 
 **Current implementation:** `python -m history_studio verify <project-id> [--config <RunConfiguration.json>]` runs or resumes this stage. Existing provider settings/configuration are reused, while FactChecker's current 4-step/3000-output-token defaults remain unchanged; no budget policy is introduced. Live dependencies are constructed lazily, so already-complete checkpoint recovery and already-WAITING_FACT_APPROVAL invocation need no model/tool calls or client. Completion returns CLI code 0; limits return 2; other stops return 1 with bounded failure/count information, without transcripts. Status includes verification artifact versions. `resume` remains read-only and points interrupted Fact Checking to `verify`.
 
-Completed-fact resume: YES. Mid-fact resume: NO. If F1/F2 are checkpointed and F3 fails before publication, FAILED preserves interrupted FACT_CHECKING; `verify` recovers and begins F3 from scratch. If the final package is already complete but the process stopped before the state transition, re-entry reloads that checkpoint and advances without re-verification. Newer research v5 cannot replace a bound v4. Already-WAITING_FACT_APPROVAL execution is a no-op. Complete research's existing nonempty facts/sources/plan requirements remain authoritative. No automatic FACTS_APPROVED transition, approval/rejection extension, Story Architect invocation, or transcript/authorization persistence is added. Single-local-writer and separate artifact/state publication limitations remain unchanged.
+Completed-fact resume: YES. Mid-fact resume: NO. If F1/F2 are checkpointed and F3 fails before publication, FAILED preserves interrupted FACT_CHECKING; `verify` recovers and begins F3 from scratch. If the final package is already complete but the process stopped before the state transition, re-entry reloads that checkpoint and advances without re-verification. Newer research v5 cannot replace a bound v4. Already-WAITING_FACT_APPROVAL execution is a no-op. Complete research's existing nonempty facts/sources/plan requirements remain authoritative. Fact Checking never automatically approves facts; the separate Human Fact Review operation owns approval/rejection. No Story Architect invocation or transcript/authorization persistence is added. Single-local-writer and separate artifact/state publication limitations remain unchanged.
 
 
 ## Pipeline artifact lineage
@@ -373,8 +374,8 @@ and transient execution state are separate responsibilities.
 | Boundary | Existing content contract / artifact type | Output binding | Approved binding / consumer | Execution status |
 |---|---|---|---|---|
 | Research → Fact Checking | ResearchPackage / research | research | Fact Checking consumes research | Implemented |
-| Fact Checking → Fact Review | VerificationPackage / verification | verification | Human reviews verification | Output binding implemented; review integration planned |
-| Fact Review → Story | Same VerificationPackage | verification | approved_verification → Story Architect | Approval and consumer planned |
+| Fact Checking → Fact Review | VerificationPackage / verification | verification | Human reviews verification | Exact review and approval implemented |
+| Fact Review → Story | Same VerificationPackage | verification | approved_verification → Story Architect | Approval implemented; Story consumer planned |
 | Story → Story Review → Script | StoryPlan / story | story | approved_story → Script Writer | Contracts and legacy gate exist; agent execution/binding planned |
 | Script → Script Review → Storyboard | Script / script | script | approved_script → Visual Director | Contracts and legacy gate exist; agent execution/binding planned |
 | Storyboard → Storyboard Review → Media | Storyboard / storyboard | storyboard | approved_storyboard → media generation | Contract and legacy gate exist; execution/binding planned |
@@ -382,10 +383,10 @@ and transient execution state are separate responsibilities.
 
 Each optional field has one meaning: the unprefixed field is the completed output
 presented to its consumer/reviewer; `approved_*` identifies the exact human-approved
-snapshot. Story/script/storyboard and all approved bindings are currently reserved,
-unpopulated fields. They do not imply implemented agents or approval behavior.
-The legacy `facts`/VerifiedFact review contract is not the VerificationPackage
-review contract and must be migrated explicitly during Human Gate integration.
+snapshot. Story/script/storyboard and their approved bindings remain reserved,
+unpopulated fields. `approved_verification` is populated only by explicit human
+Fact Review approval. The legacy `facts`/VerifiedFact contract remains readable,
+but the Fact Review path now requires the bound VerificationPackage.
 
 **Lifecycle invariant:** produce → persist immutable artifact → reload/validate the
 exact returned version → atomically publish binding and next workflow state in
@@ -421,19 +422,98 @@ is synthesized. New serialization writes only `artifacts`; the old Python proper
 is a read-only compatibility alias. `require_research_input_ref(project_id)` remains
 the authoritative established guard, now backed by typed bindings. A legacy waiting
 gate can be displayed/idempotently observed without fabricating verification identity;
-future Fact Review execution must require the exact verification binding.
+Fact Review execution requires the exact verification binding.
 
 **Version-discovery audit:** research's unbound newest-valid checkpoint scan is
 legitimate recovery discovery; bound completed research loads its exact version.
 Verification's reverse scan filters by the exact bound research input and validates
 membership, so it discovers matching execution checkpoints rather than changing
 workflow input. ArtifactStore version enumeration/allocation is storage infrastructure.
-CLI status/diagnostic listings are operational. CLI review's globally latest target
-and the legacy human-decision method's globally latest gate check are unsafe semantic
-selection for the new pipeline: future gate integration must consume the bound target
-and persist the approved binding. They are intentionally not redesigned here.
+CLI status/diagnostic listings are operational. Fact Review and fact decisions now
+consume the bound verification target. Story/script/storyboard CLI review and legacy
+gate checks still select globally latest artifacts; future gate integration must
+consume their bound targets and persist approval bindings. These unrelated gates
+are intentionally unchanged.
 
 For a new durable contract, add an explicit typed field and expected artifact type,
 bind the returned exact version with the completion state, consume only that binding,
 and bind approval separately at its Human Gate. Undefined media outputs need their
 own content contracts before introducing media lineage fields.
+
+
+## Human Fact Review and exact approval
+
+**Decision:** human Fact Review consumes `artifacts.verification` and approval binds
+that identical immutable reference as `artifacts.approved_verification`. Approval
+of an unnamed set of facts would not provide reproducible provenance.
+
+```text
+artifacts.research = research:v4
+    → artifacts.verification = verification:v7
+    → WAITING_FACT_APPROVAL
+    → human reviews exact verification:v7
+    → explicit APPROVED decision
+    → artifacts.approved_verification = verification:v7
+    → FACTS_APPROVED
+```
+
+The gate requires WAITING_FACT_APPROVAL, project-consistent typed bindings, the exact
+existing complete VerificationPackage, an identical research input reference, and
+membership/claim snapshots matching the exact completed ResearchPackage. Typed
+loads enforce package/result invariants. Missing, malformed, incomplete, stale or
+foreign references fail closed; newer verification artifacts have no semantic effect.
+Legacy missing bindings remain readable but cannot pass this gate or acquire
+fabricated approved provenance. Fact decisions cannot use the old latest-`facts`
+path. Story/script/storyboard legacy gates retain their existing behavior.
+
+Review with `python -m history_studio review <project-id> facts`. Output identifies
+the exact version and displays every fact in captured research order: fact ID,
+exact claim snapshot, status, verification_evidence, contradiction_evidence,
+unresolved_issues, rationale, and independence_note. Text is bounded and escaped;
+large evidence/issue collections have explicit omission markers. The complete exact
+artifact remains available for inspection. No transcript, ToolObservation, provider
+traffic, authorization ledger, or hidden reasoning is loaded/displayed.
+
+To apply an external human attestation, use the same command with
+`--decision-file <human-decision.json>`. The file follows ApprovalRecord:
+
+```json
+{
+  "project_id": "example",
+  "stage": "facts",
+  "artifact_type": "verification",
+  "artifact_version": 7,
+  "decision": "APPROVED",
+  "feedback": "Reviewed the exact package",
+  "decided_at": "2026-10-04T12:00:00Z",
+  "decided_by": "Human reviewer",
+  "decision_source": "human"
+}
+```
+
+The human's attested project/type/version must match the bound target exactly.
+The local caller authenticates the human; this contract is not an identity service.
+`apply_fact_review_decision` revalidates the exact target and records the human
+attestation; `apply_fact_review` atomically writes FACTS_APPROVED and its identical
+approved reference in one RuntimeState publication. Approval produces no new
+VerificationPackage. Duplicate decisions for the same project/stage/artifact
+identity are rejected. Legacy fact decisions and verification decisions are
+separate artifact namespaces.
+
+As with existing gates, the immutable approval audit and RuntimeState are separate
+files: the audit is published first. A crash/failure before state publication leaves
+the workflow waiting with no new approved binding. It requires explicit operator
+reconciliation; duplicate protection prevents automatic approval replay. Single
+local writer coordination remains required; no cross-file transaction is claimed.
+
+REJECTED and REVISION_REQUESTED preserve the exact review target, leave approved
+verification empty, record the decision, and return to FACT_CHECKING as before.
+They do not fabricate results or automatically rerun accepted facts. The existing
+runner's completed-checkpoint behavior is unchanged; this patch does not introduce
+a revision/re-verification policy. A decided artifact cannot simply be approved
+again; a new valid review target requires explicit stage publication.
+
+Ordinary transitions, FAILED, serialization/reload, and recovery retain approved
+identity. Future Story Architect must consume `artifacts.approved_verification`,
+not the unapproved review target and never globally latest verification. Story
+execution is not implemented.

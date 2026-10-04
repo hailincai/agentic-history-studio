@@ -28,7 +28,7 @@ class ApprovalRecord(Contract):
     model_config = {"frozen": True}
     project_id: Identifier
     stage: ApprovalStage
-    artifact_type: ApprovalStage
+    artifact_type: ApprovalStage | Literal["verification"]
     artifact_version: int = Field(gt=0, strict=True)
     decision: ApprovalDecision
     feedback: str = ""
@@ -38,6 +38,7 @@ class ApprovalRecord(Contract):
 
     @model_validator(mode="after")
     def matching_stage(self) -> Self:
-        if self.stage != self.artifact_type:
+        if self.stage != self.artifact_type and not (
+                self.stage == ApprovalStage.FACTS and self.artifact_type == "verification"):
             raise ValueError("Approval stage must match artifact type")
         return self

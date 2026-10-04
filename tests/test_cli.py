@@ -23,8 +23,8 @@ def test_create_status_review_resume(tmp_path: Path, capsys) -> None:
     assert main(["--projects-dir", str(tmp_path), "status", "li_bai"]) == 0
     output = capsys.readouterr().out
     assert "李白" in output and "CREATED" in output and "None" in output
-    assert main(["--projects-dir", str(tmp_path), "review", "li_bai", "facts"]) == 0
-    assert "No facts artifact" in capsys.readouterr().out
+    assert main(["--projects-dir", str(tmp_path), "review", "li_bai", "facts"]) == 1
+    assert "WAITING_FACT_APPROVAL" in capsys.readouterr().err
     snapshot = state_path.read_bytes()
     assert main(["--projects-dir", str(tmp_path), "resume", "li_bai"]) == 0
     assert "Would resume from: CREATED" in capsys.readouterr().out
@@ -83,9 +83,9 @@ def test_status_latest_version_and_review(tmp_path: Path, capsys) -> None:
     config = ProjectConfig(project_id="li_bai", topic="topic")
     store.save("research", config)
     store.save("research", config)
-    store.save("facts", config)
+    store.save("story", config)
     assert main(["--projects-dir", str(tmp_path), "status", "li_bai"]) == 0
     assert "research: v2" in capsys.readouterr().out
-    assert main(["--projects-dir", str(tmp_path), "review", "li_bai", "facts"]) == 0
-    assert "facts_v1.json" in capsys.readouterr().out
+    assert main(["--projects-dir", str(tmp_path), "review", "li_bai", "story"]) == 0
+    assert "story_v1.json" in capsys.readouterr().out
     assert store.list_versions("approvals") == []
