@@ -2,7 +2,7 @@
 
 Agentic History Studio builds source-grounded historical documentaries with explicit human review. The first planned documentary is a five-minute Chinese film about Li Bai (李白).
 
-**Implemented:** project/state/artifact infrastructure, autonomous research with bounded retrieval, verification contracts, and FactChecker decisions, search/read dispatch, observation round trips, bounded autonomous investigation, and terminal semantic submission. Explicit canonical evidence acceptance and VerificationResult construction are implemented; persistence and workflow integration remain planned. The normal test suite is offline; the CLI `research` command makes paid requests.
+**Implemented:** project/state/artifact infrastructure, autonomous research with bounded retrieval, verification contracts, and FactChecker decisions, search/read dispatch, observation round trips, bounded autonomous investigation, and terminal semantic submission. Explicit canonical evidence acceptance, VerificationResult construction, and a versioned VerificationPackage artifact contract are implemented; automatic persistence and workflow integration remain planned. The normal test suite is offline; the CLI `research` command makes paid requests.
 
 ## System and responsibility boundaries
 
@@ -317,4 +317,14 @@ Planned: integrated FactChecker persistence/resume/workflow transitions and huma
 
 **Invariant:** Persisted ResearchPackage (project + artifact type + version) → VerificationContext → FactChecker investigation → semantic VerificationSubmission → Runtime finalization → VerificationResult retaining that exact snapshot reference. Runtime selects the snapshot; the Agent cannot override it.
 
-**Current implementation:** The builder requires an explicit reference and checks project/type binding; it never infers a version from content. ArtifactStore retains its immutable version semantics. The reference is required, with no fabricated legacy fallback; durable verification persistence is not yet implemented. This binding is a prerequisite for later VerificationPackage membership and resume orchestration, neither implemented here.
+**Current implementation:** The builder requires an explicit reference and checks project/type binding; it never infers a version from content. ArtifactStore retains its immutable version semantics. The reference is required, with no fabricated legacy fallback; automatic verification persistence is not yet implemented. This binding supports VerificationPackage membership; resume orchestration remains planned.
+
+### VerificationPackage: accepted stage knowledge
+
+**Decision:** `create_verification_package(research_package, research_input_ref=...)` captures one exact research snapshot and its ordered `(research_fact_id, claim_snapshot)` membership. `add_verification_result(package, result)` returns a detached, validated copy containing the added accepted result. Neither API calls a model/tool nor writes an artifact.
+
+**Why:** Research membership identifies the facts requiring verification; a `VerificationResult` is accepted knowledge about one fact. `VerificationPackage` aggregates that knowledge for one exact ResearchPackage snapshot, including partial completion, without duplicating research evidence/source content for membership.
+
+**Invariant:** ResearchPackage snapshot → FactChecker verifies atomic facts → per-fact VerificationResult → VerificationPackage → durable versioned verification-stage knowledge. Each member has at most one accepted result per package. Foreign facts, changed claims, duplicate results, and results bound to another research snapshot are rejected. Investigation transcripts, observations, model traffic, working context, and read-authorization state are excluded; canonical VerificationEvidence remains inside each result. Statuses are preserved without reinterpretation.
+
+**Current implementation:** `schema_version=1`, `research_input_ref`, ordered `research_facts`, and `results` are persisted fields. `completed_fact_ids`, `pending_fact_ids`, and `is_complete` are derived from membership in original research order, regardless of result insertion order. Empty membership has no pending work. Frozen package fields and tuple collections support copy-on-update; nested results retain their existing contracts and are reparsed at update/load boundaries. The existing `ArtifactStore.save("verification", package)` / `load("verification", version, VerificationPackage)` APIs provide immutable `verification_vN.json` artifacts; no separate package hash is needed. A v1 containing F1 remains unchanged when v2 adds F2. This prepares resume orchestration but does not implement it, automatic saving, a multi-fact runner, or workflow transitions.

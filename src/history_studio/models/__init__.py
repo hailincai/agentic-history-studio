@@ -2,6 +2,9 @@ from .artifact_reference import ArtifactReference
 from .facts import FactStatus, VerifiedFact
 from .verification import VerificationEvidence, VerificationResult, VerificationStatus
 from .verification_context import VerificationContext, build_verification_context
+from .verification_package import (
+    ResearchFactSnapshot, VerificationPackage, create_verification_package, add_verification_result,
+)
 from .project import ProjectConfig
 from .research import EvidenceReference, ResearchFact
 from .historical_time import HistoricalTime, TimePrecision
@@ -13,6 +16,7 @@ from .storyboard import GenerationMethod, Shot, Storyboard
 
 __all__ = [
     "ArtifactReference",
+    "ResearchFactSnapshot", "VerificationPackage", "create_verification_package", "add_verification_result",
     "VerificationContext", "build_verification_context",
     "VerificationEvidence", "VerificationResult", "VerificationStatus",
     "EvidenceReference", "HistoricalTime", "TimePrecision", "ResearchGap", "ResearchPackage",
