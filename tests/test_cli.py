@@ -76,7 +76,7 @@ def test_invalid_config_creates_no_project(tmp_path: Path) -> None:
     assert not (tmp_path / "bad").exists()
 
 
-def test_status_latest_version_and_review(tmp_path: Path, capsys) -> None:
+def test_status_lists_artifacts_but_story_review_requires_workflow_authority(tmp_path: Path, capsys) -> None:
     from history_studio.storage import ArtifactStore
     create(tmp_path)
     store = ArtifactStore(tmp_path / "li_bai")
@@ -86,6 +86,6 @@ def test_status_latest_version_and_review(tmp_path: Path, capsys) -> None:
     store.save("story", config)
     assert main(["--projects-dir", str(tmp_path), "status", "li_bai"]) == 0
     assert "research: v2" in capsys.readouterr().out
-    assert main(["--projects-dir", str(tmp_path), "review", "li_bai", "story"]) == 0
-    assert "story_v1.json" in capsys.readouterr().out
+    assert main(["--projects-dir", str(tmp_path), "review", "li_bai", "story"]) == 1
+    assert "Story Review requires WAITING_STORY_APPROVAL" in capsys.readouterr().err
     assert store.list_versions("approvals") == []
