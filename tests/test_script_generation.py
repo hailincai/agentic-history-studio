@@ -74,7 +74,13 @@ def test_schema_contains_only_proposal_fields_and_detached_tool_definitions():
     for forbidden in ("story_input_ref", "VerificationStatus", "StoryFactUse", "HistoricalTime",
                       "source_id", "schema_version", "approval_identity", "evidence"):
         assert forbidden not in encoded
-    assert "sections" in schema["properties"]
+    assert set(schema["properties"]) == {"title", "sections"}
+    assert set(schema["required"]) == {"title", "sections"}
+    section_schema = schema["$defs"]["ScriptSectionSubmission"]
+    assert set(section_schema["properties"]) == {"section_id", "title", "segments"}
+    assert set(section_schema["required"]) == {"section_id", "title", "segments"}
+    assert "title" not in schema["properties"]["title"]
+    assert "title" not in section_schema["properties"]["title"]
     assert schema["additionalProperties"] is False
     tools[0]["name"] = "search"
     assert writer.tool_definitions()[0]["name"] == "submit_script"
