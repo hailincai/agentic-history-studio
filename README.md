@@ -376,7 +376,7 @@ and transient execution state are separate responsibilities.
 | Research → Fact Checking | ResearchPackage / research | research | Fact Checking consumes research | Implemented |
 | Fact Checking → Fact Review | VerificationPackage / verification | verification | Human reviews verification | Exact review and approval implemented |
 | Fact Review → Story | Same VerificationPackage | verification | approved_verification → Story Architect | Approval implemented; Story consumer planned |
-| Story → Story Review → Script | StoryPlan / story | story | approved_story → Script Writer | Contracts and legacy gate exist; agent execution/binding planned |
+| Story → Story Review → Script | StoryPackage / story (legacy StoryPlan remains separate) | story | approved_story → Script Writer | Grounded contracts, context, preparation and finalization implemented; generation/binding/exact Story Gate planned |
 | Script → Script Review → Storyboard | Script / script | script | approved_script → Visual Director | Contracts and legacy gate exist; agent execution/binding planned |
 | Storyboard → Storyboard Review → Media | Storyboard / storyboard | storyboard | approved_storyboard → media generation | Contract and legacy gate exist; execution/binding planned |
 | Media → Assembly → COMPLETE | No typed durable output contract yet | Not defined | Not defined | Workflow states only; execution planned |
@@ -517,3 +517,232 @@ Ordinary transitions, FAILED, serialization/reload, and recovery retain approved
 identity. Future Story Architect must consume `artifacts.approved_verification`,
 not the unapproved review target and never globally latest verification. Story
 execution is not implemented.
+
+## Phase 4: Story Architecture
+
+Phase 3 asks: **Which historical claims are sufficiently verified, qualified,
+disputed, rejected, or unresolved?** Phase 4 asks: **Given the approved factual
+knowledge, how should the documentary story be structured?**
+
+Phase 4 produces a grounded story blueprint for the future Script Writer. It
+performs no new historical research or fact verification and does not produce
+final documentary narration, storyboards, or media.
+
+```text
+INPUT:  RuntimeState.artifacts.approved_verification → exact approved VerificationPackage
+        Approved verified facts → Story architecture → Approved grounded story
+OUTPUT: RuntimeState.artifacts.approved_story → exact approved StoryPackage → future Script Writer
+```
+
+### Implementation order versus runtime execution order
+
+These orders intentionally differ. Development is contract-first: define what a
+valid submission is and how Runtime authenticates it before connecting the LLM
+that produces it. Consequently P4-D was implemented before P4-E, while runtime
+generation (P4-E) must precede finalization (P4-D).
+
+| Implementation milestone | Responsibility | Current status |
+|---|---|---|
+| P4-A | Story durable contracts | Completed |
+| P4-B | Bounded StoryContext | Completed |
+| P4-C | Story Architect preparation/instructions | Completed |
+| P4-D0 | Per-fact chronology contract correction | Completed |
+| P4-D | StorySubmission + deterministic finalization | Completed |
+| P4-E | LLM Story Architect generation | Not yet implemented |
+| P4-G | Workflow persistence/binding | Not yet implemented |
+| P4-H | Human Story Gate | Not yet implemented |
+| P4-Z | Integration closure | Not yet implemented |
+
+### Logical runtime flow
+
+The diagram describes the complete intended flow, not an already executable
+pipeline. Steps 1, 2 and 4 exist as independently callable boundaries. Step 3,
+`submit_story(...)` wiring, Step 5 and Step 6 remain planned.
+
+```mermaid
+flowchart TD
+    Phase3["[RUNTIME + HUMAN] Phase 3 complete"] --> Input["[RUNTIME] approved_verification: exact approved snapshot"]
+    Input --> Context["[RUNTIME] Step 1: Build StoryContext"]
+    Context --> Prepare["[RUNTIME] Step 2: Prepare bounded Story Architect input"]
+    Prepare --> Plan["[LLM] Step 3: Narrative planning - planned P4-E"]
+    Plan --> Submit["[LLM → RUNTIME] submit_story(...) - planned wiring"]
+    Submit --> Proposal["[LLM] StorySubmission: UNTRUSTED PROPOSAL"]
+    Proposal --> Trust["[RUNTIME] TRUST BOUNDARY: authenticate proposal"]
+    Trust --> Finalize["[RUNTIME] Step 4: Validate + finalize StorySubmission"]
+    Finalize --> Package["[RUNTIME] StoryPackage"]
+    Package --> Persist["[RUNTIME] Step 5: Persist; bind exact artifacts.story; WAITING_STORY_APPROVAL - planned P4-G"]
+    Persist --> Review{"[HUMAN] Step 6: Story Review - planned P4-H"}
+    Review -->|REVISION / REJECT| Plan
+    Review -->|APPROVE| Approved["[RUNTIME] Bind exact approved_story; STORY_APPROVED"]
+    Approved --> Writer["[LLM] Future Phase 5: Script Writer"]
+```
+
+### Step 1: Runtime builds StoryContext
+
+`build_story_context(store, verification_input_ref=...)` consumes the exact
+approved VerificationPackage selected by Runtime. Future P4-G will supply
+`RuntimeState.artifacts.approved_verification`; the builder does not itself
+authenticate human approval. It loads that exact verification version and the
+exact ResearchPackage identified by `VerificationPackage.research_input_ref`.
+Project lineage, membership and exact claim equality must match; there is no
+latest-artifact fallback.
+
+VerificationPackage remains authoritative for membership, claims, status,
+supporting/contradicting evidence, unresolved issues and rationale. ResearchPackage
+contributes only each captured fact's original chronology. StoryContext exposes
+eligible facts, excluded facts as cautionary knowledge, and pending claims without
+inventing a verification verdict. Canonical evidence and qualifications/disputes
+remain visible; unrelated research facts, confidence, planning/progress, sources
+and runtime execution state do not.
+
+StoryContext is a bounded working projection, not the final story or another
+persisted source of truth. It answers: **What approved historical knowledge may
+the Story Architect reason over?**
+
+### Step 2: Runtime prepares Agent input
+
+P4-C's `StoryArchitect.prepare()` returns instructions followed by deterministic
+structured StoryContext JSON. It makes no model request and does not silently
+truncate or rank facts. This is a semantic context boundary, not a tokenizer or
+aggregate token budget. The instructions define what knowledge may be used, what
+must not be invented, and the strict chronological storytelling requirement.
+
+| Authoritative status | Permitted narrative use |
+|---|---|
+| VERIFIED | Affirmative or qualified use under the existing contract |
+| PARTIALLY_VERIFIED | Qualified use consistent with context evidence, rationale and unresolved issues |
+| DISPUTED | Explicit dispute/uncertainty with qualification; never certainty |
+| REJECTED | Cautionary knowledge only; cannot ground historical narrative |
+| UNVERIFIED | Cautionary knowledge only; cannot ground historical narrative |
+
+Pending claims have no accepted result and cannot ground narrative. No new research,
+search/read actions, or unsupported historical invention is allowed. Approximate,
+unknown and ambiguous chronology must remain visible rather than acquire invented
+precision.
+
+### Step 3: LLM narrative planning and the submission trust boundary
+
+**Agent owns narrative decisions.** Planned P4-E is the primary semantic reasoning
+stage: the LLM selects important eligible facts, decides emphasis, groups facts into
+sections/beats, orders the narrative, creates structural transitions and a grounded
+thesis, and decides how disputes and uncertainty should appear. It cannot decide
+authoritative VerificationStatus, HistoricalTime, verification provenance, or
+whether an unknown fact becomes valid. It performs no new historical research.
+
+Narrative structure may be generated; historical substance must remain grounded.
+For a supplied eligible departure fact, planning to use Li Bai's departure from
+Shu as a transition is allowed. Adding an unsupported desire for recognition or
+a farewell at dawn invents motive and scene details. Structural transitions must
+not smuggle historical claims into ungrounded prose.
+
+The LLM proposes **StorySubmission**, not an authoritative StoryPackage. Its
+Agent-owned fields are title, narrative thesis, section/beat identity and order,
+purpose, narrative role, summary, historical/structural intent, selected fact IDs,
+StoryFactUse, qualification wording and uncertainty notes. Decisions such as
+“Use F-12 in this beat,” “Use F-18 as qualified,” or “Group F-21 and F-22 in this
+section” remain **untrusted semantic proposals** until Runtime finalization.
+The submission contract already exists; native `submit_story(...)` wiring does not.
+
+### Step 4: Runtime validates and finalizes
+
+**Runtime owns grounding and provenance invariants.** The pure P4-D boundary
+`finalize_story_submission(context, submission)` revalidates and detaches both
+inputs. For every proposed fact ID, Runtime:
+
+1. Resolves its exact identity through StoryContext and confirms existence/eligibility.
+2. Obtains authoritative VerificationStatus and validates proposed StoryFactUse.
+3. Enforces structurally required qualification presence.
+4. Obtains the fact's authoritative HistoricalTime.
+5. Constructs StoryFactReference and matching StoryFactChronology.
+6. Binds exactly `StoryContext.verification_input_ref` and constructs StoryPackage.
+
+Unknown, excluded and pending facts fail closed. Historical beats require grounding;
+structural beats contain neither grounding references nor chronology entries.
+Section/beat IDs must be valid and unique. Narrative order remains Agent-owned;
+finalization neither sorts ambiguous dates nor claims to establish optimal ordering.
+Neither input is mutated and no filesystem, provider, network or tool calls occur.
+
+Runtime preserves historical meaning rather than inventing it:
+
+```text
+StorySubmission: beat uses F-A + F-B
+StoryContext:    F-A → 701; F-B → 725
+StoryPackage:    fact_refs = [F-A, F-B]
+                 fact_chronology = [F-A → 701, F-B → 725]
+```
+
+There is no synthetic beat-level `701–725` date. A range may be copied only if it
+already exists as an authoritative fact's chronology; Runtime does not merge,
+average, widen or choose a representative date for several facts.
+
+### Step 5: Runtime persistence and workflow — planned P4-G
+
+The intended lifecycle is:
+
+```text
+Produce → Persist → Bind exact ArtifactReference → Transition → Consume bound reference
+
+StoryPackage → ArtifactStore persist → exact ArtifactReference
+             → RuntimeState.artifacts.story → WAITING_STORY_APPROVAL
+```
+
+P4-G will validate the exact published version and bind its returned identity
+with the next workflow state, following the existing pipeline lineage invariant.
+Output binding is separate from approval. No latest lookup or schema-version
+inference may replace the bound snapshot. Story persistence/binding and execution
+integration are not yet implemented; legacy gate primitives do not establish this
+future exact-lineage behavior.
+
+### Step 6: Human Story Gate — planned P4-H
+
+**Human owns final narrative acceptance.** Review will evaluate narrative quality,
+unsupported historical implications, invented motive/emotion/dialogue/scene details,
+qualification adequacy, treatment of disputed evidence, chronology as presented,
+emphasis, balance and overall coherence.
+
+```text
+APPROVE           → bind exact artifacts.approved_story → STORY_APPROVED
+REVISION / REJECT → return to Story generation/revision
+```
+
+The intended gate reviews the exact bound StoryPackage version and approves that
+same reference. StoryPackage finalization alone is not human approval. P4-H is not
+yet implemented; revision/rejection behavior shown here is the intended future flow.
+
+### Deterministic validation limits
+
+Runtime can prove fact identity, authoritative status, permitted StoryFactUse,
+structural qualification presence, preserved authoritative per-fact chronology,
+exact provenance and structural grounding invariants, given the trusted context.
+It cannot deterministically prove that prose contains no invented motive, emotion,
+dialogue or scene detail; that qualification wording is adequate; that a thesis or
+structural transition contains no unsupported implication; or that narrative order
+is historically optimal.
+
+**Runtime grounding validation != complete semantic historical validation.**
+These semantic responsibilities explain why the Human Gate remains part of Phase 4.
+
+### Phase 4 blueprint versus future Phase 5 narration
+
+Phase 4's output is a **story blueprint**, for example:
+
+```text
+Section: Leaving Shu
+Beat purpose: transition from Li Bai's youth to his wider travels
+Grounding: F-12, F-13 (only if present and eligible in the supplied context)
+```
+
+The Story Architect plans “Use Li Bai's departure from Shu as the transition into
+the next period of his life.” The future Script Writer consumes the exact approved
+blueprint and writes the actual Chinese documentary narration. Script Writer
+execution is not implemented; existing Script contracts do not imply it is.
+
+| Role | Architectural question |
+|---|---|
+| Research Agent | What historical facts can we find? |
+| Fact Checker | Which claims survive independent verification? |
+| Story Architect | How should approved facts be organized into a story? |
+| Future Script Writer | How should the approved story be written as documentary narration? |
+
+**Agent owns narrative decisions. Runtime owns grounding and provenance invariants.
+Human owns final narrative acceptance.**
