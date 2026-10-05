@@ -84,6 +84,20 @@ def show_validation_diagnostic(path: Path) -> None:
 
 
 def review(path: Path, stage: str, decision_path: Path | None = None) -> None:
+    if stage == "script":
+        from history_studio.workflow import ApprovalRecord
+        from history_studio.workflow.script_review import load_script_review, script_review_lines, apply_script_review
+        _, state = read_project(path)
+        package = load_script_review(state, ArtifactStore(path))
+        for line in script_review_lines(state, package):
+            print(line)
+        if decision_path is not None:
+            record = ApprovalRecord.model_validate_json(decision_path.read_text(encoding="utf-8"))
+            decided = apply_script_review(path, record)
+            print(f"Human decision {record.decision}: {decided.current_state}")
+        else:
+            print("An external human approval decision is required. This command records no decision.")
+        return
     if stage == "story":
         from history_studio.workflow import ApprovalRecord
         from history_studio.workflow.story_review import load_story_review, story_review_lines, apply_story_review
@@ -113,7 +127,7 @@ def review(path: Path, stage: str, decision_path: Path | None = None) -> None:
             print("An external human approval decision is required. This command records no decision.")
         return
     if decision_path is not None:
-        raise ValueError("Decision files are supported only for Fact and Story Review")
+        raise ValueError("Decision files are supported only for Fact, Story and Script Review")
     store = ArtifactStore(path)
     versions = store.list_versions(stage)
     if not versions:
@@ -142,7 +156,7 @@ def main(argv: list[str] | None = None) -> int:
         if command == "review":
             subparser.add_argument("stage", choices=[stage.value for stage in ApprovalStage])
             subparser.add_argument("--decision-file", type=Path,
-                                  help="External human ApprovalRecord JSON for the exact Fact or Story Review target")
+                                  help="External human ApprovalRecord JSON for the exact Fact, Story or Script Review target")
     research = commands.add_parser("research", help="Run/resume autonomous research (paid API calls)")
     research.add_argument("project_id")
     research.add_argument("--config", type=Path, help="JSON RunConfiguration; no secrets")

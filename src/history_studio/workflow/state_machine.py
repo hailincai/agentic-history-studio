@@ -113,6 +113,8 @@ class ProjectStateMachine:
             return self.apply_fact_review_decision(record, store)
         if record.stage == ApprovalStage.STORY:
             return self.apply_story_review_decision(record, store)
+        if record.stage == ApprovalStage.SCRIPT:
+            return self.apply_script_review_decision(record, store)
         gates = {
             ApprovalStage.FACTS: (S.WAITING_FACT_APPROVAL, S.FACTS_APPROVED, S.FACT_CHECKING),
             ApprovalStage.STORY: (S.WAITING_STORY_APPROVAL, S.STORY_APPROVED, S.STORY_GENERATING),
@@ -191,3 +193,26 @@ class ProjectStateMachine:
         store.save("approvals", record)
         return self._set_state(S.STORY_APPROVED if record.decision == ApprovalDecision.APPROVED
                                else S.STORY_GENERATING, artifacts=bindings)
+
+    def apply_script_review_decision(self, record: ApprovalRecord, store: ArtifactStore) -> RuntimeState:
+        """Human acceptance of exactly the bound ScriptPackage, never a latest artifact."""
+        from .script_review import load_script_review
+        record = ApprovalRecord.model_validate(record.model_dump(mode="json"))
+        load_script_review(self.state, store)
+        reference = self.state.require_script_ref(store.project_dir.name)
+        if (record.stage != ApprovalStage.SCRIPT or record.artifact_type != "script"
+                or record.project_id != reference.project_id or record.artifact_version != reference.version):
+            raise InvalidTransitionError("Human decision must identify the exact bound Script artifact")
+        for version in store.list_versions("approvals"):
+            previous = store.load("approvals", version, ApprovalRecord)
+            if (previous.project_id == record.project_id and previous.stage == record.stage
+                    and previous.artifact_type == record.artifact_type
+                    and previous.artifact_version == record.artifact_version):
+                raise InvalidTransitionError("This Script artifact already has a human decision")
+        bindings = self.state.artifacts.without_script_approval()
+        if record.decision == ApprovalDecision.APPROVED:
+            bindings = WorkflowArtifactBindings.model_validate(bindings.model_dump(mode="json") | {
+                "approved_script": reference.model_dump(mode="json")})
+        store.save("approvals", record)
+        return self._set_state(S.SCRIPT_APPROVED if record.decision == ApprovalDecision.APPROVED
+                               else S.SCRIPT_GENERATING, artifacts=bindings)

@@ -73,3 +73,9 @@ class WorkflowArtifactBindings(Contract):
         return type(self)(research=self.research, verification=self.verification,
                           approved_verification=self.approved_verification, story=self.story,
                           approved_story=self.approved_story, script=reference)
+
+    def without_script_approval(self) -> Self:
+        """Preserve the Script review target and upstream lineage; clear downstream approval."""
+        return type(self)(research=self.research, verification=self.verification,
+                          approved_verification=self.approved_verification, story=self.story,
+                          approved_story=self.approved_story, script=self.script)
