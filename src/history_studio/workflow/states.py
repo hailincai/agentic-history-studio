@@ -97,6 +97,12 @@ class RuntimeState(Contract):
             raise ValueError("Exact completed verification snapshot binding is missing; explicit reconciliation required")
         return ArtifactReference.model_validate(self.artifacts.verification.model_dump(mode="json"))
 
+    def require_approved_verification_ref(self, project_id: str) -> ArtifactReference:
+        self.artifacts.validate_project(project_id)
+        if self.artifacts.approved_verification is None:
+            raise ValueError("Exact approved verification binding is missing")
+        return ArtifactReference.model_validate(self.artifacts.approved_verification.model_dump(mode="json"))
+
     @model_validator(mode="after")
     def consistent_snapshot(self) -> Self:
         if self.last_successful_state not in DURABLE_CHECKPOINTS:

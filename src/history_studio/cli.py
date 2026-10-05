@@ -135,6 +135,9 @@ def main(argv: list[str] | None = None) -> int:
     verify = commands.add_parser("verify", help="Run/resume Fact Checking (paid API calls)")
     verify.add_argument("project_id")
     verify.add_argument("--config", type=Path, help="Existing JSON RunConfiguration; provider settings are reused")
+    story = commands.add_parser("story", help="Run/resume Story generation (paid API calls)")
+    story.add_argument("project_id")
+    story.add_argument("--config", type=Path, help="Existing JSON RunConfiguration; provider settings are reused")
     args = parser.parse_args(argv)
     try:
         path = project_path(args.projects_dir, args.project_id)
@@ -148,6 +151,8 @@ def main(argv: list[str] | None = None) -> int:
                 return run_research(path, config, args.config)
             elif args.command == "verify":
                 return run_verification(path, config, args.config)
+            elif args.command == "story":
+                return run_story(path, config, args.config)
             elif args.command == "review":
                 review(path, args.stage, args.decision_file)
             elif state.current_state == ProjectState.COMPLETE:
@@ -157,7 +162,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Last successful state: {state.last_successful_state}")
                 if state.latest_error:
                     print(f"Latest error: {state.latest_error}")
-                command = "verify" if ProjectStateMachine(state).resume_state == ProjectState.FACT_CHECKING else "research"
+                command = {ProjectState.FACT_CHECKING: "verify", ProjectState.STORY_GENERATING: "story"}.get(
+                    ProjectStateMachine(state).resume_state, "research")
                 print(f"Resume is read-only. Use {command} <project-id> to continue the stage.")
     except (OSError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -231,4 +237,32 @@ def run_verification(path: Path, project: ProjectConfig, config_path: Path | Non
               f"pending facts: {len(outcome.stage.package.pending_fact_ids)}")
         if outcome.stage.failure_phase is not None:
             print(f"Failure phase: {outcome.stage.failure_phase}; error type: {outcome.stage.error_type}")
+    return 2 if outcome.stage and outcome.stage.stop_reason.value == "LIMIT_REACHED" else 1
+
+
+def run_story(path: Path, project: ProjectConfig, config_path: Path | None) -> int:
+    from history_studio.openai_model import OpenAIModelProvider
+    from history_studio.research.openai_provider import RunConfiguration, create_client
+    from history_studio.workflow.story import StoryWorkflow
+    saved = path / ".runtime/research_config.json"
+    effective = config_path or (saved if saved.exists() else None)
+    configuration = (RunConfiguration.model_validate_json(effective.read_text(encoding="utf-8"))
+                     if effective else RunConfiguration())
+    client = None
+    def provider_factory(context):
+        nonlocal client
+        if client is None:
+            client = create_client(configuration.provider)
+        provider = configuration.provider
+        return OpenAIModelProvider(client, provider.model,
+            provider.input_usd_per_million, provider.output_usd_per_million)
+    try:
+        outcome = StoryWorkflow(provider_factory=provider_factory).run(project, ArtifactStore(path))
+    finally:
+        if client is not None:
+            client.close()
+    if outcome.state.current_state == ProjectState.WAITING_STORY_APPROVAL:
+        print(f"Story awaits human review: story:v{outcome.state.artifacts.story.version}; WAITING_STORY_APPROVAL")
+        return 0
+    print(f"Story stopped: {outcome.state.latest_error}; FAILED")
     return 2 if outcome.stage and outcome.stage.stop_reason.value == "LIMIT_REACHED" else 1

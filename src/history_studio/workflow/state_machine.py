@@ -88,6 +88,16 @@ class ProjectStateMachine:
             raise InvalidTransitionError("Only a failed workflow can recover")
         return self._set_state(self.resume_state)
 
+    def complete_story(self, reference: ArtifactReference, *, project_id: str) -> RuntimeState:
+        """Caller publishes/reloads exact Story output before this atomic gate snapshot."""
+        if self.state.current_state != S.STORY_GENERATING:
+            raise InvalidTransitionError("Story binding requires active STORY_GENERATING")
+        reference = ArtifactReference.model_validate(reference.model_dump(mode="json"))
+        if reference.project_id != project_id or reference.artifact_type != "story":
+            raise ValueError("Story reference must identify this project's story artifact")
+        self.state.require_approved_verification_ref(project_id)
+        return self._set_state(S.WAITING_STORY_APPROVAL, artifacts=self.state.artifacts.with_story(reference))
+
     def apply_human_decision(self, record: ApprovalRecord, store: ArtifactStore) -> RuntimeState:
         if record.stage == ApprovalStage.FACTS:
             return self.apply_fact_review_decision(record, store)

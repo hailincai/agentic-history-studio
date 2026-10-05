@@ -53,3 +53,10 @@ class WorkflowArtifactBindings(Contract):
         if reference == self.verification:
             return type(self).model_validate(self.model_dump(mode="json"))
         return type(self)(research=self.research, verification=reference)
+
+    def with_story(self, reference: ArtifactReference) -> Self:
+        """Replacing Story invalidates approval and all Story-derived outputs."""
+        if reference == self.story:
+            return type(self).model_validate(self.model_dump(mode="json"))
+        return type(self)(research=self.research, verification=self.verification,
+                          approved_verification=self.approved_verification, story=reference)
