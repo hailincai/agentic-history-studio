@@ -10,6 +10,7 @@ from .research import EvidenceReference, ResearchFact
 from .historical_time import HistoricalTime, TimePrecision
 from .research_package import ResearchGap, ResearchPackage, ResearchPlan, ResearchProgress, ResearchRunStatus, GapStatus
 from .script import Script, ScriptScene
+from .script_package import ScriptGrounding, ScriptPackage, ScriptSection, ScriptSegment, ScriptSegmentKind
 from .sources import SourceReference, SourceType
 from .story import StoryBeat, StoryPlan
 from .story_context import StoryContext, StoryContextFact, StoryPendingClaim
@@ -19,6 +20,7 @@ from .story_package import (
 from .storyboard import GenerationMethod, Shot, Storyboard
 
 __all__ = [
+    "ScriptGrounding", "ScriptPackage", "ScriptSection", "ScriptSegment", "ScriptSegmentKind",
     "StoryContext", "StoryContextFact", "StoryPendingClaim",
     "StoryFactUse", "StoryFactReference", "StoryFactChronology", "StoryNarrativeBeat", "StorySection", "StoryStructure", "StoryPackage",
     "ArtifactReference",
