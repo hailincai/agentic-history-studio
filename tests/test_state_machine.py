@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from history_studio.models import (Script, Storyboard, ArtifactReference, VerificationPackage,
+from history_studio.models import (Storyboard, ArtifactReference, VerificationPackage,
     create_verification_package, add_verification_result)
 from history_studio.storage import ArtifactStore
 from history_studio.workflow import (
@@ -70,13 +70,12 @@ def test_full_workflow_with_persisted_human_gates(tmp_path: Path) -> None:
             machine.transition(approved)
         artifacts = {
             "facts": artifact(),
-            "script": Script(title="title", scenes=[dict(scene_id="s1", sequence=1,
-                narration="narration", fact_ids=["f1"], duration_seconds=10)], target_duration_seconds=10),
             "storyboard": Storyboard(shots=[dict(shot_id="shot1", scene_id="s1", sequence=1,
                 start_seconds=0, duration_seconds=10, visual_description="river", location="China",
                 period="Tang", generation_method="STATIC_IMAGE", camera_motion="none", prompt="river")],
                 estimated_media_cost_usd=0),
         }
+        decision_version = 1
         if stage == "story":
             from history_studio.story import build_story_context, StorySubmission, finalize_story_submission
             context = build_story_context(store, verification_input_ref=ref("verification"))
@@ -88,9 +87,22 @@ def test_full_workflow_with_persisted_human_gates(tmp_path: Path) -> None:
             bindings = machine.state.artifacts.with_story(ref("story", version))
             machine = ProjectStateMachine(RuntimeState(current_state=S.WAITING_STORY_APPROVAL,
                 last_successful_state=S.WAITING_STORY_APPROVAL, artifacts=bindings))
+        elif stage == "script":
+            from history_studio.script import build_script_context, ScriptSubmission, finalize_script_submission
+            context = build_script_context(store, story_input_ref=machine.state.artifacts.approved_story)
+            section = context.sections[0]
+            beat = section.beats[0]
+            proposal = ScriptSubmission(title="title", sections=[dict(
+                section_id=section.section_id, title="opening", segments=[dict(
+                    segment_id="s1", kind="HISTORICAL", narration="narration", grounding=dict(
+                        story_beat_id=beat.beat_id, research_fact_ids=[beat.fact_refs[0].research_fact_id]))])])
+            decision_version = store.save("script", finalize_script_submission(context, proposal))
+            bindings = machine.state.artifacts.with_script(ref("script", decision_version))
+            machine = ProjectStateMachine(RuntimeState(current_state=S.WAITING_SCRIPT_APPROVAL,
+                last_successful_state=S.WAITING_SCRIPT_APPROVAL, artifacts=bindings))
         else:
             store.save("verification" if stage == "facts" else stage, artifacts[stage])
-        assert machine.apply_human_decision(record(stage), store).current_state == approved
+        assert machine.apply_human_decision(record(stage, version=decision_version), store).current_state == approved
         machine.transition(generating)
         machine.transition(waiting)
     machine.transition(S.COMPLETE)
