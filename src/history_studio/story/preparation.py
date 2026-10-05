@@ -46,7 +46,11 @@ from narrative prose. Preserve approximate, unknown, overlapping and ambiguous d
 When facts cannot be deterministically ordered, preserve the ambiguity rather than invent
 exact ordering or fabricate precision. Context list order is not proof of chronology.
 Chronological organization is a narrative decision, not permission to conduct research.
-Preparation supplies working input only. No tools or story submission are available.
+Preparation supplies working input only and makes no model request. During generation,
+the only capability is submit_story: terminally hand off StorySubmission with Agent-owned
+fields only. Do not supply status, chronology or provenance; Runtime derives them.
+Submit the completed proposal through that tool, not ordinary text. No research tools
+are available. Do not disclose or include private reasoning in the submission.
 """
 
 

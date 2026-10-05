@@ -74,8 +74,8 @@ def test_no_provider_or_tools_or_generation_capability(monkeypatch):
     monkeypatch.setattr(Responses, "create", forbidden)
     architect = StoryArchitect(context())
     assert decode(architect.prepare())["eligible_facts"]
-    for name in ("provider", "tools", "tool_definitions", "decide_next_action", "run",
-                 "submit_story", "finalize_submission"):
+    assert architect.provider is None
+    for name in ("tools", "decide_next_action", "run", "finalize_submission"):
         assert not hasattr(architect, name)
 
 
