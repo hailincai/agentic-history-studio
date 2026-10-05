@@ -66,23 +66,31 @@ def create_client(config: OpenAIConfiguration) -> OpenAI:
 
 def strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
     """Normalize Pydantic defaults to Responses' required-property strict schemas."""
-    def visit(value: Any) -> Any:
+    schema_mappings = {"properties", "$defs", "definitions", "patternProperties", "dependentSchemas"}
+
+    def visit(value: Any, *, mapping: bool = False) -> Any:
         if isinstance(value, list):
             return [visit(item) for item in value]
         if not isinstance(value, dict):
             return value
-        result = {k: visit(v) for k, v in value.items() if k not in ("default", "title")}
+        if mapping:
+            # Mapping keys are user names, not schema keywords or annotations.
+            return {name: visit(child) for name, child in value.items()}
+        result = {k: visit(v, mapping=k in schema_mappings)
+                  for k, v in value.items() if k not in ("default", "title")}
         if result.get("type") == "object":
             result["additionalProperties"] = False
             result["required"] = list(result.get("properties", {}))
         return result
     root = visit(schema)
 
-    def expand(value: Any, resolving: tuple[str, ...] = ()) -> Any:
+    def expand(value: Any, resolving: tuple[str, ...] = (), *, mapping: bool = False) -> Any:
         if isinstance(value, list):
             return [expand(item, resolving) for item in value]
         if not isinstance(value, dict):
             return value
+        if mapping:
+            return {name: expand(child, resolving) for name, child in value.items()}
         if "$ref" in value and len(value) > 1:
             ref = value["$ref"]
             if not isinstance(ref, str) or not ref.startswith("#/") or ref in resolving:
@@ -100,7 +108,8 @@ def strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
             target = expand(target, (*resolving, ref))
             merged = {**target, **{key: item for key, item in value.items() if key != "$ref"}}
             return expand(visit(merged), (*resolving, ref))
-        return {key: expand(item, resolving) for key, item in value.items()}
+        return {key: expand(item, resolving, mapping=key in schema_mappings)
+                for key, item in value.items()}
 
     return expand(root)
 

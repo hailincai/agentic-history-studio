@@ -64,7 +64,13 @@ ordering between ambiguous/overlapping facts or synthesize date ranges across a 
 Respect approved Story presentation order and chronology without treating list position
 as proof of temporal order. Preserve uncertainty rather than converting it into precision.
 
-Preparation supplies working input only; it makes no model request and provides no tools.
+Preparation supplies working input only and makes no model request. During generation,
+the only capability is submit_script: terminally hand off ScriptSubmission with Agent-owned
+fields only. Supply approved section IDs in approved order, and historical segments in
+their approved beat order within each section. Do not supply provenance, status, use,
+qualification metadata or chronology; Runtime authenticates selected IDs and binds provenance.
+Submit the completed proposal through that tool, not ordinary text. No research tools
+are available. Model output is an untrusted proposal, never an accepted ScriptPackage.
 Follow grounding rules without disclosing or including private reasoning.
 """
 

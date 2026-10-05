@@ -99,10 +99,11 @@ def test_preparation_has_no_execution_capabilities(monkeypatch):
     monkeypatch.setattr(Responses, "create", forbidden)
     writer = ScriptWriter(context())
     assert decode(writer.prepare())["sections"]
-    for name in ("provider", "tools", "tool_definitions", "generate", "submit_script",
+    assert writer.provider is None
+    for name in ("tools",
                  "finalize_submission", "estimate_duration", "run", "decide_next_action"):
         assert not hasattr(writer, name)
-    assert "submit_script" not in INSTRUCTIONS
+    assert [tool["name"] for tool in writer.tool_definitions()] == ["submit_script"]
 
 
 @pytest.mark.parametrize("guidance", [
