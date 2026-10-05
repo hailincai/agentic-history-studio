@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from history_studio.models import (StoryPlan, Script, Storyboard, ArtifactReference, VerificationPackage,
+from history_studio.models import (Script, Storyboard, ArtifactReference, VerificationPackage,
     create_verification_package, add_verification_result)
 from history_studio.storage import ArtifactStore
 from history_studio.workflow import (
@@ -70,9 +70,6 @@ def test_full_workflow_with_persisted_human_gates(tmp_path: Path) -> None:
             machine.transition(approved)
         artifacts = {
             "facts": artifact(),
-            "story": StoryPlan(title="title", thesis="thesis", central_question="why", hook="hook",
-                beats=[dict(sequence=1, title="title", time_period="Tang", purpose="purpose",
-                            fact_ids=["f1"], target_seconds=10)], ending="ending", target_duration_seconds=10),
             "script": Script(title="title", scenes=[dict(scene_id="s1", sequence=1,
                 narration="narration", fact_ids=["f1"], duration_seconds=10)], target_duration_seconds=10),
             "storyboard": Storyboard(shots=[dict(shot_id="shot1", scene_id="s1", sequence=1,
@@ -80,7 +77,19 @@ def test_full_workflow_with_persisted_human_gates(tmp_path: Path) -> None:
                 period="Tang", generation_method="STATIC_IMAGE", camera_motion="none", prompt="river")],
                 estimated_media_cost_usd=0),
         }
-        store.save("verification" if stage == "facts" else stage, artifacts[stage])
+        if stage == "story":
+            from history_studio.story import build_story_context, StorySubmission, finalize_story_submission
+            context = build_story_context(store, verification_input_ref=ref("verification"))
+            proposal = StorySubmission(title="title", narrative_thesis="thesis", sections=[dict(
+                section_id="section_01", purpose="purpose", beats=[dict(beat_id="beat_01",
+                    narrative_role="opening", summary="Grounded opening", fact_proposals=[dict(
+                        research_fact_id=context.eligible_facts[0].research_fact_id, use="AFFIRMATIVE")])])])
+            version = store.save("story", finalize_story_submission(context, proposal))
+            bindings = machine.state.artifacts.with_story(ref("story", version))
+            machine = ProjectStateMachine(RuntimeState(current_state=S.WAITING_STORY_APPROVAL,
+                last_successful_state=S.WAITING_STORY_APPROVAL, artifacts=bindings))
+        else:
+            store.save("verification" if stage == "facts" else stage, artifacts[stage])
         assert machine.apply_human_decision(record(stage), store).current_state == approved
         machine.transition(generating)
         machine.transition(waiting)

@@ -60,3 +60,8 @@ class WorkflowArtifactBindings(Contract):
             return type(self).model_validate(self.model_dump(mode="json"))
         return type(self)(research=self.research, verification=self.verification,
                           approved_verification=self.approved_verification, story=reference)
+
+    def without_story_approval(self) -> Self:
+        """Retain the review target/upstream lineage while invalidating downstream use."""
+        return type(self)(research=self.research, verification=self.verification,
+                          approved_verification=self.approved_verification, story=self.story)
