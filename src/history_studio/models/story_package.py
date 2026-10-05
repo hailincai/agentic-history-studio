@@ -49,13 +49,25 @@ class StoryFactReference(Contract):
         return self
 
 
+class StoryFactChronology(Contract):
+    """Exact chronology of one grounded ResearchFact, not a synthetic beat date.
+
+    Future Runtime finalization copies this value from authoritative StoryContext.
+    Model validation checks shape only; it cannot authenticate the supplied time.
+    """
+
+    research_fact_id: Identifier
+    historical_time: HistoricalTime
+
+
 class StoryNarrativeBeat(Contract):
     """Historical prose requires references; structural prose makes no historical claims.
 
     Structural beats can describe an opening/transition/conclusion, but cannot hide
     historical substance. Later semantic review must also ground titles, thesis,
     purposes and any other prose containing historical assertions.
-    Chronology is separate from prose and must later be checked against source facts.
+    Per-fact chronology is separate from prose and must later be checked against
+    authoritative context. No beat date is inferred, merged, widened or selected.
     UNKNOWN/APPROXIMATE dates remain expressible; sequence is never a date sort key.
     """
 
@@ -64,18 +76,20 @@ class StoryNarrativeBeat(Contract):
     narrative_role: Text
     summary: Text
     fact_refs: tuple[StoryFactReference, ...] = Field(default_factory=tuple)
-    historical_time: HistoricalTime | None = None
+    fact_chronology: tuple[StoryFactChronology, ...] = Field(default_factory=tuple)
     uncertainty_notes: tuple[Text, ...] = Field(default_factory=tuple)
 
     @model_validator(mode="after")
     def grounding_shape(self) -> Self:
         require_unique([ref.research_fact_id for ref in self.fact_refs], "Beat fact references")
+        chronology_ids = [entry.research_fact_id for entry in self.fact_chronology]
+        require_unique(chronology_ids, "Beat chronology fact IDs")
         if self.kind == "historical":
             if not self.fact_refs:
                 raise ValueError("Historical beat requires fact grounding")
-            if self.historical_time is None:
-                raise ValueError("Historical beat requires chronology metadata")
-        elif self.fact_refs or self.historical_time is not None:
+            if set(chronology_ids) != {ref.research_fact_id for ref in self.fact_refs}:
+                raise ValueError("Historical beat chronology must exactly match grounding fact IDs")
+        elif self.fact_refs or self.fact_chronology:
             raise ValueError("Structural beat cannot carry historical grounding or chronology")
         return self
 

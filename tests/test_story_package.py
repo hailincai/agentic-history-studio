@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from history_studio.models import (
-    ArtifactReference, HistoricalTime, StoryFactReference, StoryNarrativeBeat,
+    ArtifactReference, HistoricalTime, StoryFactReference, StoryFactChronology, StoryNarrativeBeat,
     StoryPackage, StorySection, StoryStructure, VerificationStatus,
 )
 
@@ -14,9 +14,13 @@ def reference(fact_id="f1", status="VERIFIED", use="AFFIRMATIVE", **kwargs):
 def beat(beat_id="beat_01", **kwargs):
     return StoryNarrativeBeat(**(dict(
         beat_id=beat_id, narrative_role="opening", summary="Introduce the grounded claim",
-        fact_refs=[reference()], historical_time=HistoricalTime(display="701", start_year=701,
-                                                               precision="YEAR"),
+        fact_refs=[reference()], fact_chronology=[chronology()],
     ) | kwargs))
+
+
+def chronology(fact_id="f1", time=None):
+    return StoryFactChronology(research_fact_id=fact_id, historical_time=time or
+                              HistoricalTime(display="701", start_year=701, precision="YEAR"))
 
 
 def plan(sections=None):
@@ -53,7 +57,7 @@ def test_duplicate_section_and_global_beat_ids():
 
 def test_historical_grounding_and_chronology_required():
     for changes, message in [({"fact_refs": []}, "fact grounding"),
-                             ({"historical_time": None}, "chronology metadata")]:
+                             ({"fact_chronology": []}, "exactly match")]:
         with pytest.raises(ValidationError, match=message):
             beat(**changes)
 
@@ -61,15 +65,16 @@ def test_historical_grounding_and_chronology_required():
 def test_structural_beat_policy():
     structural = StoryNarrativeBeat(beat_id="transition_01", kind="structural",
                                    narrative_role="transition", summary="Move to the next section")
-    assert not structural.fact_refs and structural.historical_time is None
+    assert not structural.fact_refs and not structural.fact_chronology
     for changes in ({"fact_refs": [reference()]},
-                    {"historical_time": HistoricalTime(display="Unknown") } ):
+                    {"fact_chronology": [chronology()]}):
         with pytest.raises(ValidationError, match="Structural beat"):
             StoryNarrativeBeat.model_validate(structural.model_dump() | changes)
 
 
 def test_multiple_facts_and_reuse_across_beats():
-    first = beat(fact_refs=[reference(), reference("f2")])
+    first = beat(fact_refs=[reference(), reference("f2")],
+                 fact_chronology=[chronology(), chronology("f2")])
     second = beat("beat_02", fact_refs=[reference()])
     result = plan([StorySection(section_id="section_01", purpose="Develop", beats=[first, second])])
     assert len(result.sections[0].beats[0].fact_refs) == 2
@@ -85,13 +90,14 @@ def test_multiple_facts_and_reuse_across_beats():
     HistoricalTime(display="Unknown date", precision="UNKNOWN"),
 ])
 def test_chronology_round_trip_without_invented_bounds(time):
-    original = beat(historical_time=time)
-    assert StoryNarrativeBeat.model_validate_json(original.model_dump_json()).historical_time == time
+    original = beat(fact_chronology=[chronology(time=time)])
+    assert StoryNarrativeBeat.model_validate_json(original.model_dump_json()).fact_chronology[0].historical_time == time
 
 
 def test_invalid_chronology_rejected():
     with pytest.raises(ValidationError, match="chronological"):
-        beat(historical_time=dict(display="Backwards", start_year=725, end_year=701, precision="RANGE"))
+        beat(fact_chronology=[dict(research_fact_id="f1", historical_time=dict(
+            display="Backwards", start_year=725, end_year=701, precision="RANGE"))])
 
 
 @pytest.mark.parametrize("status,use", [
@@ -128,5 +134,31 @@ def test_uncertain_use_requires_explicit_qualification(status, use):
 
 def test_structural_validation_does_not_claim_semantic_proof():
     # Unknown membership and unsuitable prose require the later loaded-package boundary.
-    value = beat(summary="An unsupported assertion", fact_refs=[reference("unknown_fact")])
+    value = beat(summary="An unsupported assertion", fact_refs=[reference("unknown_fact")],
+                 fact_chronology=[chronology("unknown_fact")])
     assert value.fact_refs[0].research_fact_id == "unknown_fact"
+
+
+def test_distinct_fact_times_preserved_without_synthetic_beat_time_or_sorting():
+    early = chronology("f1")
+    late = chronology("f2", HistoricalTime(display="725", start_year=725, precision="YEAR"))
+    value = beat(fact_refs=[reference(), reference("f2")], fact_chronology=[late, early])
+    assert value.fact_chronology == (late, early)
+    restored = StoryNarrativeBeat.model_validate_json(value.model_dump_json())
+    assert restored == value
+    assert [entry.historical_time.start_year for entry in restored.fact_chronology] == [725, 701]
+    assert "historical_time" not in value.model_dump()
+    with pytest.raises(ValidationError, match="Extra inputs"):
+        StoryNarrativeBeat.model_validate(value.model_dump() | {"historical_time": early.historical_time})
+
+
+@pytest.mark.parametrize("entries", [[], ["f1"], ["f1", "f2", "unrelated"], ["f1", "unrelated"]])
+def test_chronology_membership_must_exactly_match_grounding(entries):
+    with pytest.raises(ValidationError, match="exactly match"):
+        beat(fact_refs=[reference(), reference("f2")],
+             fact_chronology=[chronology(fact_id) for fact_id in entries])
+
+
+def test_duplicate_chronology_identity_rejected():
+    with pytest.raises(ValidationError, match="Beat chronology fact IDs must be unique"):
+        beat(fact_chronology=[chronology(), chronology()])
