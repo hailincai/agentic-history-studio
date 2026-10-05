@@ -152,6 +152,9 @@ def main(argv: list[str] | None = None) -> int:
     story = commands.add_parser("story", help="Run/resume Story generation (paid API calls)")
     story.add_argument("project_id")
     story.add_argument("--config", type=Path, help="Existing JSON RunConfiguration; provider settings are reused")
+    script = commands.add_parser("script", help="Run/resume Script generation (paid API calls)")
+    script.add_argument("project_id")
+    script.add_argument("--config", type=Path, help="Existing JSON RunConfiguration; provider settings are reused")
     args = parser.parse_args(argv)
     try:
         path = project_path(args.projects_dir, args.project_id)
@@ -167,6 +170,8 @@ def main(argv: list[str] | None = None) -> int:
                 return run_verification(path, config, args.config)
             elif args.command == "story":
                 return run_story(path, config, args.config)
+            elif args.command == "script":
+                return run_script(path, config, args.config)
             elif args.command == "review":
                 review(path, args.stage, args.decision_file)
             elif state.current_state == ProjectState.COMPLETE:
@@ -176,7 +181,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Last successful state: {state.last_successful_state}")
                 if state.latest_error:
                     print(f"Latest error: {state.latest_error}")
-                command = {ProjectState.FACT_CHECKING: "verify", ProjectState.STORY_GENERATING: "story"}.get(
+                command = {ProjectState.FACT_CHECKING: "verify", ProjectState.STORY_GENERATING: "story",
+                           ProjectState.SCRIPT_GENERATING: "script"}.get(
                     ProjectStateMachine(state).resume_state, "research")
                 print(f"Resume is read-only. Use {command} <project-id> to continue the stage.")
     except (OSError, ValueError) as exc:
@@ -279,4 +285,35 @@ def run_story(path: Path, project: ProjectConfig, config_path: Path | None) -> i
         print(f"Story awaits human review: story:v{outcome.state.artifacts.story.version}; WAITING_STORY_APPROVAL")
         return 0
     print(f"Story stopped: {outcome.state.latest_error}; FAILED")
+    return 2 if outcome.stage and outcome.stage.stop_reason.value == "LIMIT_REACHED" else 1
+
+def run_script(path: Path, project: ProjectConfig, config_path: Path | None) -> int:
+    from history_studio.openai_model import OpenAIModelProvider
+    from history_studio.research.openai_provider import RunConfiguration, create_client
+    from history_studio.workflow.script import ScriptWorkflow
+    saved = path / ".runtime/research_config.json"
+    effective = config_path or (saved if saved.exists() else None)
+    configuration = (RunConfiguration.model_validate_json(effective.read_text(encoding="utf-8"))
+                     if effective else RunConfiguration())
+    client = None
+    def provider_factory(context):
+        nonlocal client
+        if client is None:
+            client = create_client(configuration.provider)
+        provider = configuration.provider
+        return OpenAIModelProvider(client, provider.model,
+            provider.input_usd_per_million, provider.output_usd_per_million)
+    try:
+        outcome = ScriptWorkflow(provider_factory=provider_factory).run(project, ArtifactStore(path))
+    finally:
+        if client is not None:
+            client.close()
+    if outcome.state.current_state == ProjectState.WAITING_SCRIPT_APPROVAL:
+        print(f"Script awaits human review: script:v{outcome.state.artifacts.script.version}; WAITING_SCRIPT_APPROVAL")
+        return 0
+    print(f"Script stopped: {outcome.state.latest_error}; FAILED")
+    if outcome.validation_report is not None and not outcome.validation_report.is_valid:
+        for issue in outcome.validation_report.issues:
+            print(f"Grounding issue: {issue.code.value}; section={issue.section_id}; "
+                  f"segment={issue.segment_id}; beat={issue.story_beat_id}; fact={issue.research_fact_id}")
     return 2 if outcome.stage and outcome.stage.stop_reason.value == "LIMIT_REACHED" else 1

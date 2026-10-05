@@ -98,6 +98,16 @@ class ProjectStateMachine:
         self.state.require_approved_verification_ref(project_id)
         return self._set_state(S.WAITING_STORY_APPROVAL, artifacts=self.state.artifacts.with_story(reference))
 
+    def complete_script(self, reference: ArtifactReference, *, project_id: str) -> RuntimeState:
+        """Caller validates and reloads exact Script output before atomic gate publication."""
+        if self.state.current_state != S.SCRIPT_GENERATING:
+            raise InvalidTransitionError("Script binding requires active SCRIPT_GENERATING")
+        reference = ArtifactReference.model_validate(reference.model_dump(mode="json"))
+        if reference.project_id != project_id or reference.artifact_type != "script":
+            raise ValueError("Script reference must identify this project's script artifact")
+        self.state.require_approved_story_ref(project_id)
+        return self._set_state(S.WAITING_SCRIPT_APPROVAL, artifacts=self.state.artifacts.with_script(reference))
+
     def apply_human_decision(self, record: ApprovalRecord, store: ArtifactStore) -> RuntimeState:
         if record.stage == ApprovalStage.FACTS:
             return self.apply_fact_review_decision(record, store)

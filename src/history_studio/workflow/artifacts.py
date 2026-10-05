@@ -65,3 +65,11 @@ class WorkflowArtifactBindings(Contract):
         """Retain the review target/upstream lineage while invalidating downstream use."""
         return type(self)(research=self.research, verification=self.verification,
                           approved_verification=self.approved_verification, story=self.story)
+
+    def with_script(self, reference: ArtifactReference) -> Self:
+        """New Script output invalidates its approval and all downstream lineage."""
+        if reference == self.script:
+            return type(self).model_validate(self.model_dump(mode="json"))
+        return type(self)(research=self.research, verification=self.verification,
+                          approved_verification=self.approved_verification, story=self.story,
+                          approved_story=self.approved_story, script=reference)
