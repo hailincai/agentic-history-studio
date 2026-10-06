@@ -1,4 +1,7 @@
 from .artifact_reference import ArtifactReference
+from .visual_director_context import (
+    VisualDirectorContext, VisualDirectorContextSection, VisualDirectorContextSegment,
+)
 from .facts import FactStatus, VerifiedFact
 from .verification import VerificationEvidence, VerificationResult, VerificationStatus
 from .verification_context import VerificationContext, build_verification_context
@@ -25,6 +28,7 @@ from .storyboard_package import (
 )
 
 __all__ = [
+    "VisualDirectorContext", "VisualDirectorContextSection", "VisualDirectorContextSegment",
     "CameraMotion", "ShotFraming", "StoryboardPackage", "StoryboardSection",
     "StoryboardShot", "StoryboardShotKind",
     "ScriptContext", "ScriptContextBeat", "ScriptContextSection",
