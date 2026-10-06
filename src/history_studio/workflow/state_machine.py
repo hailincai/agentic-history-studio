@@ -115,6 +115,8 @@ class ProjectStateMachine:
             return self.apply_story_review_decision(record, store)
         if record.stage == ApprovalStage.SCRIPT:
             return self.apply_script_review_decision(record, store)
+        if record.stage == ApprovalStage.STORYBOARD:
+            return self.apply_storyboard_review_decision(record, store)
         gates = {
             ApprovalStage.FACTS: (S.WAITING_FACT_APPROVAL, S.FACTS_APPROVED, S.FACT_CHECKING),
             ApprovalStage.STORY: (S.WAITING_STORY_APPROVAL, S.STORY_APPROVED, S.STORY_GENERATING),
@@ -227,3 +229,26 @@ class ProjectStateMachine:
         store.save("approvals", record)
         return self._set_state(S.SCRIPT_APPROVED if record.decision == ApprovalDecision.APPROVED
                                else S.SCRIPT_GENERATING, artifacts=bindings)
+
+    def apply_storyboard_review_decision(self, record: ApprovalRecord, store: ArtifactStore) -> RuntimeState:
+        """Human acceptance of exactly the bound StoryboardPackage, never latest."""
+        from .storyboard_review import load_storyboard_review
+        record = ApprovalRecord.model_validate(record.model_dump(mode="json"))
+        load_storyboard_review(self.state, store)
+        reference = self.state.require_storyboard_ref(store.project_dir.name)
+        if (record.stage != ApprovalStage.STORYBOARD or record.artifact_type != "storyboard"
+                or record.project_id != reference.project_id or record.artifact_version != reference.version):
+            raise InvalidTransitionError("Human decision must identify the exact bound Storyboard artifact")
+        for version in store.list_versions("approvals"):
+            previous = store.load("approvals", version, ApprovalRecord)
+            if (previous.project_id == record.project_id and previous.stage == record.stage
+                    and previous.artifact_type == record.artifact_type
+                    and previous.artifact_version == record.artifact_version):
+                raise InvalidTransitionError("This Storyboard artifact already has a human decision")
+        bindings = self.state.artifacts.without_storyboard_approval()
+        if record.decision == ApprovalDecision.APPROVED:
+            bindings = WorkflowArtifactBindings.model_validate(bindings.model_dump(mode="json") | {
+                "approved_storyboard": reference.model_dump(mode="json")})
+        store.save("approvals", record)
+        return self._set_state(S.STORYBOARD_APPROVED if record.decision == ApprovalDecision.APPROVED
+                               else S.STORYBOARD_GENERATING, artifacts=bindings)

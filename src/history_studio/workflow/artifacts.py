@@ -88,3 +88,10 @@ class WorkflowArtifactBindings(Contract):
                           approved_verification=self.approved_verification, story=self.story,
                           approved_story=self.approved_story, script=self.script,
                           approved_script=self.approved_script, storyboard=reference)
+
+    def without_storyboard_approval(self) -> Self:
+        """Preserve reviewed candidate and upstream authority; clear its approval."""
+        return type(self)(research=self.research, verification=self.verification,
+                          approved_verification=self.approved_verification, story=self.story,
+                          approved_story=self.approved_story, script=self.script,
+                          approved_script=self.approved_script, storyboard=self.storyboard)

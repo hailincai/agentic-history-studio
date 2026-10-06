@@ -84,6 +84,26 @@ def show_validation_diagnostic(path: Path) -> None:
 
 
 def review(path: Path, stage: str, decision_path: Path | None = None) -> None:
+    if stage == "storyboard":
+        from history_studio.workflow import ApprovalRecord
+        from history_studio.workflow.storyboard_review import (
+            load_storyboard_review, storyboard_review_lines, apply_storyboard_review,
+        )
+        from history_studio.visual_director import build_visual_director_context
+        _, state = read_project(path)
+        store = ArtifactStore(path)
+        package = load_storyboard_review(state, store)
+        context = build_visual_director_context(store,
+            script_input_ref=state.require_approved_script_ref(store.project_dir.name))
+        for line in storyboard_review_lines(state, package, context):
+            print(line)
+        if decision_path is not None:
+            record = ApprovalRecord.model_validate_json(decision_path.read_text(encoding="utf-8"))
+            decided = apply_storyboard_review(path, record)
+            print(f"Human decision {record.decision}: {decided.current_state}")
+        else:
+            print("An external human approval decision is required. This command records no decision.")
+        return
     if stage == "script":
         from history_studio.workflow import ApprovalRecord
         from history_studio.workflow.script_review import load_script_review, script_review_lines, apply_script_review
@@ -127,7 +147,7 @@ def review(path: Path, stage: str, decision_path: Path | None = None) -> None:
             print("An external human approval decision is required. This command records no decision.")
         return
     if decision_path is not None:
-        raise ValueError("Decision files are supported only for Fact, Story and Script Review")
+        raise ValueError("Decision files are supported only for Fact, Story, Script and Storyboard Review")
     store = ArtifactStore(path)
     versions = store.list_versions(stage)
     if not versions:
@@ -156,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
         if command == "review":
             subparser.add_argument("stage", choices=[stage.value for stage in ApprovalStage])
             subparser.add_argument("--decision-file", type=Path,
-                                  help="External human ApprovalRecord JSON for the exact Fact, Story or Script Review target")
+                                  help="External human ApprovalRecord JSON for the exact Fact, Story, Script or Storyboard Review target")
     research = commands.add_parser("research", help="Run/resume autonomous research (paid API calls)")
     research.add_argument("project_id")
     research.add_argument("--config", type=Path, help="JSON RunConfiguration; no secrets")
