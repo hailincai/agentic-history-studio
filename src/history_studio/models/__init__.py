@@ -19,8 +19,14 @@ from .story_package import (
     StoryFactUse, StoryFactReference, StoryFactChronology, StoryNarrativeBeat, StorySection, StoryStructure, StoryPackage,
 )
 from .storyboard import GenerationMethod, Shot, Storyboard
+from .storyboard_package import (
+    CameraMotion, ShotFraming, StoryboardPackage, StoryboardSection, StoryboardShot,
+    StoryboardShotKind,
+)
 
 __all__ = [
+    "CameraMotion", "ShotFraming", "StoryboardPackage", "StoryboardSection",
+    "StoryboardShot", "StoryboardShotKind",
     "ScriptContext", "ScriptContextBeat", "ScriptContextSection",
     "ScriptGrounding", "ScriptPackage", "ScriptSection", "ScriptSegment", "ScriptSegmentKind",
     "StoryContext", "StoryContextFact", "StoryPendingClaim",
