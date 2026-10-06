@@ -97,7 +97,9 @@ def test_no_execution_or_enrichment(monkeypatch):
             assert set(segment) == {"segment_id", "kind", "narration", "grounding"}
             if segment["grounding"]:
                 assert set(segment["grounding"]) == {"story_beat_id", "research_fact_ids"}
-    for name in ("provider", "generate", "tool_definitions", "submit_storyboard", "finalize_submission",
+    assert director.provider is None
+    assert [tool["name"] for tool in director.tool_definitions()] == ["submit_storyboard"]
+    for name in ("finalize_submission",
                  "estimate_duration", "validate_grounding", "run"):
         assert not hasattr(director, name)
 
