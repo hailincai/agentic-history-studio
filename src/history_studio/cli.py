@@ -169,6 +169,9 @@ def main(argv: list[str] | None = None) -> int:
     script = commands.add_parser("script", help="Run/resume Script generation (paid API calls)")
     script.add_argument("project_id")
     script.add_argument("--config", type=Path, help="Existing JSON RunConfiguration; provider settings are reused")
+    storyboard = commands.add_parser("storyboard", help="Run/resume Storyboard generation (paid API calls)")
+    storyboard.add_argument("project_id")
+    storyboard.add_argument("--config", type=Path, help="Existing JSON RunConfiguration; provider settings are reused")
     args = parser.parse_args(argv)
     try:
         path = project_path(args.projects_dir, args.project_id)
@@ -186,6 +189,8 @@ def main(argv: list[str] | None = None) -> int:
                 return run_story(path, config, args.config)
             elif args.command == "script":
                 return run_script(path, config, args.config)
+            elif args.command == "storyboard":
+                return run_storyboard(path, config, args.config)
             elif args.command == "review":
                 review(path, args.stage, args.decision_file)
             elif state.current_state == ProjectState.COMPLETE:
@@ -196,7 +201,8 @@ def main(argv: list[str] | None = None) -> int:
                 if state.latest_error:
                     print(f"Latest error: {state.latest_error}")
                 command = {ProjectState.FACT_CHECKING: "verify", ProjectState.STORY_GENERATING: "story",
-                           ProjectState.SCRIPT_GENERATING: "script"}.get(
+                           ProjectState.SCRIPT_GENERATING: "script",
+                           ProjectState.STORYBOARD_GENERATING: "storyboard"}.get(
                     ProjectStateMachine(state).resume_state, "research")
                 print(f"Resume is read-only. Use {command} <project-id> to continue the stage.")
     except (OSError, ValueError) as exc:
@@ -330,4 +336,35 @@ def run_script(path: Path, project: ProjectConfig, config_path: Path | None) -> 
         for issue in outcome.validation_report.issues:
             print(f"Grounding issue: {issue.code.value}; section={issue.section_id}; "
                   f"segment={issue.segment_id}; beat={issue.story_beat_id}; fact={issue.research_fact_id}")
+    return 2 if outcome.stage and outcome.stage.stop_reason.value == "LIMIT_REACHED" else 1
+
+def run_storyboard(path: Path, project: ProjectConfig, config_path: Path | None) -> int:
+    from history_studio.openai_model import OpenAIModelProvider
+    from history_studio.research.openai_provider import RunConfiguration, create_client
+    from history_studio.workflow.storyboard import StoryboardWorkflow
+    saved = path / ".runtime/research_config.json"
+    effective = config_path or (saved if saved.exists() else None)
+    configuration = (RunConfiguration.model_validate_json(effective.read_text(encoding="utf-8"))
+                     if effective else RunConfiguration())
+    client = None
+    def provider_factory(context):
+        nonlocal client
+        if client is None:
+            client = create_client(configuration.provider)
+        provider = configuration.provider
+        return OpenAIModelProvider(client, provider.model,
+            provider.input_usd_per_million, provider.output_usd_per_million)
+    try:
+        outcome = StoryboardWorkflow(provider_factory=provider_factory).run(project, ArtifactStore(path))
+    finally:
+        if client is not None:
+            client.close()
+    if outcome.state.current_state == ProjectState.WAITING_STORYBOARD_APPROVAL:
+        print(f"Storyboard awaits human review: storyboard:v{outcome.state.artifacts.storyboard.version}; WAITING_STORYBOARD_APPROVAL")
+        return 0
+    print(f"Storyboard stopped: {outcome.state.latest_error}; FAILED")
+    if outcome.validation_report is not None and not outcome.validation_report.is_valid:
+        for issue in outcome.validation_report.issues:
+            print(f"Integrity issue: {issue.code.value}; section={issue.section_id}; "
+                  f"shot={issue.shot_id}; segment={issue.source_segment_id}")
     return 2 if outcome.stage and outcome.stage.stop_reason.value == "LIMIT_REACHED" else 1

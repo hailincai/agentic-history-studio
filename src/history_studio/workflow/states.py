@@ -121,6 +121,12 @@ class RuntimeState(Contract):
             raise ValueError("Exact Script review binding is missing")
         return ArtifactReference.model_validate(self.artifacts.script.model_dump(mode="json"))
 
+    def require_approved_script_ref(self, project_id: str) -> ArtifactReference:
+        self.artifacts.validate_project(project_id)
+        if self.artifacts.approved_script is None:
+            raise ValueError("Exact approved Script binding is missing")
+        return ArtifactReference.model_validate(self.artifacts.approved_script.model_dump(mode="json"))
+
     @model_validator(mode="after")
     def consistent_snapshot(self) -> Self:
         if self.last_successful_state not in DURABLE_CHECKPOINTS:

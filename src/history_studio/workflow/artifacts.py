@@ -79,3 +79,12 @@ class WorkflowArtifactBindings(Contract):
         return type(self)(research=self.research, verification=self.verification,
                           approved_verification=self.approved_verification, story=self.story,
                           approved_story=self.approved_story, script=self.script)
+
+    def with_storyboard(self, reference: ArtifactReference) -> Self:
+        """Publishing a Storyboard candidate invalidates its prior approval."""
+        if reference == self.storyboard:
+            return type(self).model_validate(self.model_dump(mode="json"))
+        return type(self)(research=self.research, verification=self.verification,
+                          approved_verification=self.approved_verification, story=self.story,
+                          approved_story=self.approved_story, script=self.script,
+                          approved_script=self.approved_script, storyboard=reference)

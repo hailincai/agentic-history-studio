@@ -142,6 +142,17 @@ class ProjectStateMachine:
         store.save("approvals", record)
         return self._set_state(approved if record.decision == ApprovalDecision.APPROVED else revision)
 
+    def complete_storyboard(self, reference: ArtifactReference, *, project_id: str) -> RuntimeState:
+        """Caller validates and reloads exact Storyboard before atomic gate publication."""
+        if self.state.current_state != S.STORYBOARD_GENERATING:
+            raise InvalidTransitionError("Storyboard binding requires active STORYBOARD_GENERATING")
+        reference = ArtifactReference.model_validate(reference.model_dump(mode="json"))
+        if reference.project_id != project_id or reference.artifact_type != "storyboard":
+            raise ValueError("Storyboard reference must identify this project's storyboard artifact")
+        self.state.require_approved_script_ref(project_id)
+        return self._set_state(S.WAITING_STORYBOARD_APPROVAL,
+                               artifacts=self.state.artifacts.with_storyboard(reference))
+
     def apply_fact_review_decision(self, record: ApprovalRecord, store: ArtifactStore) -> RuntimeState:
         """Only the human-attested, exact bound VerificationPackage can be approved."""
         from .fact_review import load_fact_review
