@@ -133,6 +133,18 @@ class RuntimeState(Contract):
             raise ValueError("Exact Storyboard review binding is missing")
         return ArtifactReference.model_validate(self.artifacts.storyboard.model_dump(mode="json"))
 
+    def require_approved_storyboard_ref(self, project_id: str) -> ArtifactReference:
+        self.artifacts.validate_project(project_id)
+        if self.artifacts.approved_storyboard is None:
+            raise ValueError("Exact approved Storyboard binding is missing")
+        return ArtifactReference.model_validate(self.artifacts.approved_storyboard.model_dump(mode="json"))
+
+    def require_media_ref(self, project_id: str) -> ArtifactReference:
+        self.artifacts.validate_project(project_id)
+        if self.artifacts.media is None:
+            raise ValueError("Exact completed media binding is missing; no orphan discovery is allowed")
+        return ArtifactReference.model_validate(self.artifacts.media.model_dump(mode="json"))
+
     @model_validator(mode="after")
     def consistent_snapshot(self) -> Self:
         if self.last_successful_state not in DURABLE_CHECKPOINTS:

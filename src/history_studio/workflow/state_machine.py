@@ -155,6 +155,22 @@ class ProjectStateMachine:
         return self._set_state(S.WAITING_STORYBOARD_APPROVAL,
                                artifacts=self.state.artifacts.with_storyboard(reference))
 
+    def begin_media(self, *, project_id: str) -> RuntimeState:
+        if self.state.current_state not in (S.STORYBOARD_APPROVED, S.GENERATING_MEDIA):
+            raise InvalidTransitionError("Media generation requires STORYBOARD_APPROVED or GENERATING_MEDIA")
+        self.state.require_approved_storyboard_ref(project_id)
+        return self._set_state(S.GENERATING_MEDIA, artifacts=self.state.artifacts.without_media())
+
+    def complete_media(self, reference: ArtifactReference, *, project_id: str) -> RuntimeState:
+        """Caller verifies exact durable manifest and binaries before this atomic snapshot."""
+        if self.state.current_state != S.GENERATING_MEDIA:
+            raise InvalidTransitionError("Media binding requires active GENERATING_MEDIA")
+        reference = ArtifactReference.model_validate(reference.model_dump(mode="python", warnings=False))
+        if reference.project_id != project_id or reference.artifact_type != "media":
+            raise ValueError("Media reference must identify this project's media artifact")
+        self.state.require_approved_storyboard_ref(project_id)
+        return self._set_state(S.ASSEMBLING, artifacts=self.state.artifacts.with_media(reference))
+
     def apply_fact_review_decision(self, record: ApprovalRecord, store: ArtifactStore) -> RuntimeState:
         """Only the human-attested, exact bound VerificationPackage can be approved."""
         from .fact_review import load_fact_review

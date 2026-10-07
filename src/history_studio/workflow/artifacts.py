@@ -20,6 +20,7 @@ class WorkflowArtifactBindings(Contract):
     approved_script: ArtifactReference | None = None
     storyboard: ArtifactReference | None = None
     approved_storyboard: ArtifactReference | None = None
+    media: ArtifactReference | None = None
 
     @model_validator(mode="after")
     def typed_lineage(self) -> Self:
@@ -95,3 +96,10 @@ class WorkflowArtifactBindings(Contract):
                           approved_verification=self.approved_verification, story=self.story,
                           approved_story=self.approved_story, script=self.script,
                           approved_script=self.approved_script, storyboard=self.storyboard)
+
+    def without_media(self) -> Self:
+        """Clear media publication while preserving every exact upstream binding."""
+        return type(self).model_validate(self.model_dump(mode="json") | {"media": None})
+
+    def with_media(self, reference: ArtifactReference) -> Self:
+        return type(self).model_validate(self.model_dump(mode="json") | {"media": reference.model_dump(mode="json")})

@@ -54,7 +54,7 @@ def show_status(path: Path, config: ProjectConfig, state: RuntimeState) -> None:
     store = ArtifactStore(path)
     print("Latest artifact versions:")
     found = False
-    for artifact_type in ("research", "verification", "facts", "story", "script", "storyboard", "approvals"):
+    for artifact_type in ("research", "verification", "facts", "story", "script", "storyboard", "media", "approvals"):
         versions = store.list_versions(artifact_type)
         if versions:
             found = True
@@ -192,6 +192,9 @@ def main(argv: list[str] | None = None) -> int:
     storyboard = commands.add_parser("storyboard", help="Run/resume Storyboard generation (paid API calls)")
     storyboard.add_argument("project_id")
     storyboard.add_argument("--config", type=Path, help="Existing JSON RunConfiguration; provider settings are reused")
+    media = commands.add_parser("media", help="Generate/publish approved media (paid API calls); stops at ASSEMBLING")
+    media.add_argument("project_id")
+    media.add_argument("--config", type=Path, help="JSON MediaConfiguration; explicit models and voice, no secrets")
     args = parser.parse_args(argv)
     try:
         path = project_path(args.projects_dir, args.project_id)
@@ -211,6 +214,8 @@ def main(argv: list[str] | None = None) -> int:
                 return run_script(path, config, args.config)
             elif args.command == "storyboard":
                 return run_storyboard(path, config, args.config)
+            elif args.command == "media":
+                return run_media(path, config, args.config)
             elif args.command == "review":
                 review(path, args.stage, args.decision_file)
             elif state.current_state == ProjectState.COMPLETE:
@@ -222,7 +227,8 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"Latest error: {state.latest_error}")
                 command = {ProjectState.FACT_CHECKING: "verify", ProjectState.STORY_GENERATING: "story",
                            ProjectState.SCRIPT_GENERATING: "script",
-                           ProjectState.STORYBOARD_GENERATING: "storyboard"}.get(
+                           ProjectState.STORYBOARD_GENERATING: "storyboard",
+                           ProjectState.GENERATING_MEDIA: "media"}.get(
                     ProjectStateMachine(state).resume_state, "research")
                 print(f"Resume is read-only. Use {command} <project-id> to continue the stage.")
     except (OSError, ValueError) as exc:
@@ -388,3 +394,49 @@ def run_storyboard(path: Path, project: ProjectConfig, config_path: Path | None)
             print(f"Integrity issue: {issue.code.value}; section={issue.section_id}; "
                   f"shot={issue.shot_id}; segment={issue.source_segment_id}")
     return 2 if outcome.stage and outcome.stage.stop_reason.value == "LIMIT_REACHED" else 1
+
+
+def run_media(path: Path, project: ProjectConfig, config_path: Path | None) -> int:
+    from history_studio.media.openai_provider import (
+        MediaConfiguration, OpenAITTSProvider, OpenAIImageProvider, OpenAIVideoProvider,
+    )
+    from history_studio.research.openai_provider import OpenAIConfiguration, create_client
+    from history_studio.workflow.media import MediaProviders, MediaWorkflow
+
+    saved = path / ".runtime/media_config.json"
+    effective = config_path or (saved if saved.exists() else None)
+    configuration = (MediaConfiguration.model_validate_json(effective.read_text(encoding="utf-8"))
+                     if effective else None)
+    client = None
+
+    def provider_factory(storyboard):
+        nonlocal client
+        if configuration is None:
+            raise ValueError("Media requires --config MediaConfiguration (or .runtime/media_config.json); no fake fallback")
+        try:
+            configuration.validate_for(storyboard)
+            client = create_client(OpenAIConfiguration(timeout_seconds=configuration.timeout_seconds))
+        except ValueError as exc:
+            print(f"Invalid media provider configuration: {exc}", file=sys.stderr)
+            raise
+        return MediaProviders(tts=OpenAITTSProvider(client, model=configuration.tts_model, voice=configuration.tts_voice),
+            image=(OpenAIImageProvider(client, model=configuration.image_model, size=configuration.image_size)
+                   if configuration.image_model else None),
+            video=(OpenAIVideoProvider(client, model=configuration.video_model, size=configuration.video_size,
+                seconds=configuration.video_seconds, poll_attempts=configuration.video_poll_attempts,
+                poll_interval_seconds=configuration.video_poll_interval_seconds) if configuration.video_model else None))
+    try:
+        outcome = MediaWorkflow(provider_factory=provider_factory).run(project, ArtifactStore(path))
+    finally:
+        if client is not None:
+            client.close()
+    if outcome.state.current_state == ProjectState.ASSEMBLING:
+        print(f"Media ready: media:v{outcome.state.artifacts.media.version}; ASSEMBLING (assembly is not executed)")
+        return 0
+    if configuration is None:
+        print("Media requires --config MediaConfiguration (or .runtime/media_config.json); no fake fallback", file=sys.stderr)
+    print(f"Media stopped: {outcome.state.latest_error}; FAILED")
+    if outcome.validation_report is not None:
+        for issue in outcome.validation_report.issues:
+            print(f"Media integrity issue: {issue.code.value}; shot={issue.shot_id}; segment={issue.segment_id}")
+    return 1
