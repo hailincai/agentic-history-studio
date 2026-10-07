@@ -1,4 +1,7 @@
 from .artifact_reference import ArtifactReference
+from .media_package import (
+    GenerationMetadata, MediaAssetReference, MediaPackage, MediaType, NarrationAsset, VisualAsset,
+)
 from .visual_director_context import (
     VisualDirectorContext, VisualDirectorContextSection, VisualDirectorContextSegment,
 )
@@ -28,6 +31,7 @@ from .storyboard_package import (
 )
 
 __all__ = [
+    "GenerationMetadata", "MediaAssetReference", "MediaPackage", "MediaType", "NarrationAsset", "VisualAsset",
     "VisualDirectorContext", "VisualDirectorContextSection", "VisualDirectorContextSegment",
     "CameraMotion", "ShotFraming", "StoryboardPackage", "StoryboardSection",
     "StoryboardShot", "StoryboardShotKind",
