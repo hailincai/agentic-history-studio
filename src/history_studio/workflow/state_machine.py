@@ -46,7 +46,6 @@ class ProjectStateMachine:
             S.STORYBOARD_GENERATING: S.WAITING_STORYBOARD_APPROVAL,
             S.STORYBOARD_APPROVED: S.GENERATING_MEDIA,
             S.GENERATING_MEDIA: S.ASSEMBLING,
-            S.ASSEMBLING: S.COMPLETE,
         }
         if allowed.get(self.state.current_state) != target:
             raise InvalidTransitionError(f"Cannot transition {self.state.current_state} -> {target}")
@@ -170,6 +169,16 @@ class ProjectStateMachine:
             raise ValueError("Media reference must identify this project's media artifact")
         self.state.require_approved_storyboard_ref(project_id)
         return self._set_state(S.ASSEMBLING, artifacts=self.state.artifacts.with_media(reference))
+
+    def complete_assembly(self, reference: ArtifactReference, *, project_id: str) -> RuntimeState:
+        """Caller reloads/authenticates exact assembly and binaries before this snapshot."""
+        if self.state.current_state != S.ASSEMBLING:
+            raise InvalidTransitionError("Assembly completion requires active ASSEMBLING")
+        reference = ArtifactReference.model_validate(reference.model_dump(mode="json"))
+        if reference.project_id != project_id or reference.artifact_type != "assembly":
+            raise ValueError("Assembly reference must identify this project's assembly artifact")
+        self.state.require_media_ref(project_id)
+        return self._set_state(S.COMPLETE, artifacts=self.state.artifacts.with_assembly(reference))
 
     def apply_fact_review_decision(self, record: ApprovalRecord, store: ArtifactStore) -> RuntimeState:
         """Only the human-attested, exact bound VerificationPackage can be approved."""

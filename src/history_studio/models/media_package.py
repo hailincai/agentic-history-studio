@@ -13,6 +13,7 @@ class MediaType(StrEnum):
     AUDIO = "AUDIO"
     IMAGE = "IMAGE"
     VIDEO = "VIDEO"
+    SUBTITLE = "SUBTITLE"
 
 
 class MediaAssetReference(Contract):

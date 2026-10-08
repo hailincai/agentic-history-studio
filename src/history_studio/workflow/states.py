@@ -145,6 +145,12 @@ class RuntimeState(Contract):
             raise ValueError("Exact completed media binding is missing; no orphan discovery is allowed")
         return ArtifactReference.model_validate(self.artifacts.media.model_dump(mode="json"))
 
+    def require_assembly_ref(self, project_id: str) -> ArtifactReference:
+        self.artifacts.validate_project(project_id)
+        if self.artifacts.assembly is None:
+            raise ValueError("Exact completed assembly binding is missing; no orphan discovery is allowed")
+        return ArtifactReference.model_validate(self.artifacts.assembly.model_dump(mode="json"))
+
     @model_validator(mode="after")
     def consistent_snapshot(self) -> Self:
         if self.last_successful_state not in DURABLE_CHECKPOINTS:
@@ -166,4 +172,9 @@ class RuntimeState(Contract):
                 raise ValueError("Checkpoint state must match last successful state")
         elif self.last_successful_state == ProjectState.COMPLETE:
             raise ValueError("A complete checkpoint cannot have an active stage")
+        if effective_state == ProjectState.COMPLETE:
+            if self.artifacts.media is None or self.artifacts.assembly is None:
+                raise ValueError("COMPLETE requires exact media and assembly bindings")
+        elif self.artifacts.assembly is not None:
+            raise ValueError("Assembly binding and COMPLETE must be published in one atomic snapshot")
         return self

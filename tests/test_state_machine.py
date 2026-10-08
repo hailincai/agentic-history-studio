@@ -105,7 +105,9 @@ def test_full_workflow_with_persisted_human_gates(tmp_path: Path) -> None:
         assert machine.apply_human_decision(record(stage, version=decision_version), store).current_state == approved
         machine.transition(generating)
         machine.transition(waiting)
-    machine.transition(S.COMPLETE)
+    machine = ProjectStateMachine(RuntimeState(current_state=S.ASSEMBLING, last_successful_state=S.STORYBOARD_APPROVED,
+        artifacts=machine.state.artifacts.with_media(ref("media"))))
+    machine.complete_assembly(ref("assembly"), project_id="li_bai")
     assert store.list_versions("approvals") == [1, 2, 3, 4]
     with pytest.raises(InvalidTransitionError):
         machine.fail("error")
@@ -236,7 +238,9 @@ def test_media_and_assembly_retain_checkpoint() -> None:
     assert machine.state.last_successful_state == S.STORYBOARD_APPROVED
     assert machine.state.failed_state == S.ASSEMBLING
     machine.recover()
-    machine.transition(S.COMPLETE)
+    machine = ProjectStateMachine(RuntimeState(current_state=S.ASSEMBLING, last_successful_state=S.STORYBOARD_APPROVED,
+        artifacts=WorkflowArtifactBindings(media=ref("media"))))
+    machine.complete_assembly(ref("assembly"), project_id="li_bai")
     assert machine.state.last_successful_state == S.COMPLETE
 
 

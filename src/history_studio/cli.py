@@ -54,7 +54,7 @@ def show_status(path: Path, config: ProjectConfig, state: RuntimeState) -> None:
     store = ArtifactStore(path)
     print("Latest artifact versions:")
     found = False
-    for artifact_type in ("research", "verification", "facts", "story", "script", "storyboard", "media", "approvals"):
+    for artifact_type in ("research", "verification", "facts", "story", "script", "storyboard", "media", "assembly", "approvals"):
         versions = store.list_versions(artifact_type)
         if versions:
             found = True
@@ -195,6 +195,10 @@ def main(argv: list[str] | None = None) -> int:
     media = commands.add_parser("media", help="Generate/publish approved media (paid API calls); stops at ASSEMBLING")
     media.add_argument("project_id")
     media.add_argument("--config", type=Path, help="JSON MediaConfiguration; explicit models and voice, no secrets")
+    assemble = commands.add_parser("assemble", help="Assemble exact bound media locally; no provider calls")
+    assemble.add_argument("project_id")
+    assemble.add_argument("--config", type=Path, required=True, help="JSON AssemblyConfiguration with render_root, ffmpeg and ffprobe")
+    assemble.add_argument("--recover", action="store_true", help="Authorize retry of FAILED assembly")
     args = parser.parse_args(argv)
     try:
         path = project_path(args.projects_dir, args.project_id)
@@ -216,6 +220,8 @@ def main(argv: list[str] | None = None) -> int:
                 return run_storyboard(path, config, args.config)
             elif args.command == "media":
                 return run_media(path, config, args.config)
+            elif args.command == "assemble":
+                return run_assembly(path, config, args.config, recover=args.recover)
             elif args.command == "review":
                 review(path, args.stage, args.decision_file)
             elif state.current_state == ProjectState.COMPLETE:
@@ -228,13 +234,32 @@ def main(argv: list[str] | None = None) -> int:
                 command = {ProjectState.FACT_CHECKING: "verify", ProjectState.STORY_GENERATING: "story",
                            ProjectState.SCRIPT_GENERATING: "script",
                            ProjectState.STORYBOARD_GENERATING: "storyboard",
-                           ProjectState.GENERATING_MEDIA: "media"}.get(
+                           ProjectState.GENERATING_MEDIA: "media", ProjectState.ASSEMBLING: "assemble"}.get(
                     ProjectStateMachine(state).resume_state, "research")
                 print(f"Resume is read-only. Use {command} <project-id> to continue the stage.")
     except (OSError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     return 0
+
+
+def run_assembly(path: Path, project: ProjectConfig, config_path: Path, *, recover: bool = False) -> int:
+    from history_studio.assembly import FFmpegRenderer
+    from history_studio.workflow.assembly import AssemblyConfiguration, AssemblyWorkflow
+
+    configuration = AssemblyConfiguration.model_validate_json(config_path.read_text(encoding="utf-8"))
+    root = configuration.render_root
+    if not root.is_absolute():
+        root = config_path.resolve().parent / root
+    # Construct local executables only when authenticated ASSEMBLING needs render.
+    outcome = AssemblyWorkflow(render_root=root, renderer_factory=lambda: FFmpegRenderer(root,
+        ffmpeg=configuration.ffmpeg, ffprobe=configuration.ffprobe,
+        timeout_seconds=configuration.timeout_seconds)).run(project, ArtifactStore(path), recover=recover)
+    if outcome.state.current_state == ProjectState.COMPLETE:
+        print(f"Assembly complete: assembly:v{outcome.state.artifacts.assembly.version}; COMPLETE")
+        return 0
+    print(f"Assembly stopped: {outcome.error_type}: {outcome.error_message}; FAILED", file=sys.stderr)
+    return 1
 
 
 def run_research(path: Path, project: ProjectConfig, config_path: Path | None) -> int:

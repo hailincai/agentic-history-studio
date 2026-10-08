@@ -21,6 +21,7 @@ class WorkflowArtifactBindings(Contract):
     storyboard: ArtifactReference | None = None
     approved_storyboard: ArtifactReference | None = None
     media: ArtifactReference | None = None
+    assembly: ArtifactReference | None = None
 
     @model_validator(mode="after")
     def typed_lineage(self) -> Self:
@@ -99,7 +100,13 @@ class WorkflowArtifactBindings(Contract):
 
     def without_media(self) -> Self:
         """Clear media publication while preserving every exact upstream binding."""
-        return type(self).model_validate(self.model_dump(mode="json") | {"media": None})
+        return type(self).model_validate(self.model_dump(mode="json") | {"media": None, "assembly": None})
 
     def with_media(self, reference: ArtifactReference) -> Self:
-        return type(self).model_validate(self.model_dump(mode="json") | {"media": reference.model_dump(mode="json")})
+        data = self.model_dump(mode="json") | {"media": reference.model_dump(mode="json")}
+        if reference != self.media:
+            data["assembly"] = None
+        return type(self).model_validate(data)
+
+    def with_assembly(self, reference: ArtifactReference) -> Self:
+        return type(self).model_validate(self.model_dump(mode="json") | {"assembly": reference.model_dump(mode="json")})
