@@ -61,7 +61,8 @@ def test_image_exact_prompt_png_base64_transport_and_metadata():
     response = dict(created=1, output_format="png", data=[dict(b64_json=base64.b64encode(png_bytes()).decode("ascii"))])
     with sdk(lambda request: httpx.Response(200, json=response)) as (client, requests):
         result = OpenAIImageProvider(client, model="gpt-image-1").generate(prompt=prompt)
-        assert json.loads(requests[0].content) == dict(prompt=prompt, model="gpt-image-1", n=1, output_format="png", size="1024x1024")
+        assert json.loads(requests[0].content) == dict(prompt=prompt, model="gpt-image-1", n=1, output_format="png", size="1024x1024",
+            quality="low", background="opaque", moderation="auto", stream=False)
         assert result.image_bytes == png_bytes() and result.image_format == "png"
         assert result.provider == "openai" and result.model == "gpt-image-1"
 

@@ -474,7 +474,8 @@ def run_media(path: Path, project: ProjectConfig, config_path: Path | None) -> i
             raise
         return MediaProviders(tts=OpenAITTSProvider(client, model=configuration.tts_model, voice=configuration.tts_voice,
             usd_per_million_characters=configuration.tts_usd_per_million_characters),
-            image=(OpenAIImageProvider(client, model=configuration.image_model, size=configuration.image_size)
+            image=(OpenAIImageProvider(client, model=configuration.image_model, size=configuration.image_size,
+                quality=configuration.image_quality, pricing=configuration.image_pricing)
                    if configuration.image_model else None),
             video=(OpenAIVideoProvider(client, model=configuration.video_model, size=configuration.video_size,
                 seconds=configuration.video_seconds, poll_attempts=configuration.video_poll_attempts,

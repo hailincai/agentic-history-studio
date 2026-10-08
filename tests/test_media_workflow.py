@@ -382,7 +382,8 @@ def test_cli_concrete_wiring_runs_only_mocked_sdk_and_closes_client(prepared, mo
     assert read(store).current_state == S.ASSEMBLING and read(store).artifacts.media == ref("media")
 
 
-def test_cli_guarded_media_blocks_before_client_or_tts(prepared, monkeypatch, capsys):
+@pytest.mark.parametrize("explicit_pricing", [False, True])
+def test_cli_guarded_media_blocks_before_client_or_tts(prepared, monkeypatch, capsys, explicit_pricing):
     from history_studio.cli import main
     import history_studio.research.openai_provider as provider_module
     _, store, _ = prepared
@@ -392,10 +393,17 @@ def test_cli_guarded_media_blocks_before_client_or_tts(prepared, monkeypatch, ca
     write_json(store.project_dir / ".runtime/state.json", RuntimeState.model_validate(data), replace=True)
     authority = read(store).artifacts
     config = store.project_dir / "media-settings.json"
-    config.write_text(json.dumps(dict(tts_model="tts-1", tts_voice="alloy", image_model="gpt-image-1")))
+    settings = dict(tts_model="tts-1", tts_voice="alloy", image_model="gpt-image-1")
+    if explicit_pricing:
+        from test_image_pricing import pricing
+        settings.update(image_size="1536x1024", image_quality="low", tts_usd_per_million_characters=1,
+                        image_pricing=pricing().model_dump(mode="json"))
+    config.write_text(json.dumps(settings))
     monkeypatch.setattr(provider_module, "create_client", lambda configuration: pytest.fail("No SDK client before price preflight"))
     assert main(["--projects-dir", str(store.project_dir.parent), "media", "project", "--config", str(config)]) == 1
-    assert "Guarded image is disabled" in capsys.readouterr().err
+    error = capsys.readouterr().err
+    assert "Guarded image is disabled" in error
+    assert ("not a proven total" if explicit_pricing else "pricing is missing") in error
     assert read(store).artifacts == authority
     assert read(store).artifacts.media is None
 
