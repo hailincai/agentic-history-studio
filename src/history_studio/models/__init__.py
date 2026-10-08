@@ -1,4 +1,5 @@
 from .artifact_reference import ArtifactReference
+from .assembly import SegmentTiming, ShotTiming, SubtitleCue, TimelinePlan
 from .media_package import (
     GenerationMetadata, MediaAssetReference, MediaPackage, MediaType, NarrationAsset, VisualAsset,
 )
@@ -31,6 +32,7 @@ from .storyboard_package import (
 )
 
 __all__ = [
+    "SegmentTiming", "ShotTiming", "SubtitleCue", "TimelinePlan",
     "GenerationMetadata", "MediaAssetReference", "MediaPackage", "MediaType", "NarrationAsset", "VisualAsset",
     "VisualDirectorContext", "VisualDirectorContextSection", "VisualDirectorContextSegment",
     "CameraMotion", "ShotFraming", "StoryboardPackage", "StoryboardSection",
