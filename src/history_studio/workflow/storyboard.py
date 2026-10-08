@@ -4,11 +4,14 @@ from collections.abc import Callable
 from history_studio.model_io import ModelProvider
 from history_studio.models import ArtifactReference, ProjectConfig, VisualDirectorContext, StoryboardPackage
 from history_studio.models.base import Contract, Text
+from history_studio.models.production_brief import load_production_brief
 from history_studio.storage.artifact_store import ArtifactStore, write_json
 from history_studio.visual_director import (
     VisualDirector, VisualDirectorGenerationOutcome, VisualDirectorGenerationStopReason, build_visual_director_context,
     validate_storyboard_integrity, StoryboardIntegrityReport,
 )
+from history_studio.visual_director.submission import GenerationMethodNotAllowedError
+from history_studio.visual_director.validation import StoryboardIntegrityIssue, StoryboardIntegrityIssueCode
 from .states import RuntimeState, ProjectState as S
 from .state_machine import ProjectStateMachine, InvalidTransitionError
 
@@ -56,6 +59,7 @@ class StoryboardWorkflow:
                 raise ValueError("Bound Storyboard integrity is invalid")
             return StoryboardWorkflowOutcome(state=state)
         machine = ProjectStateMachine(state)
+        context.production_brief = load_production_brief(store.project_dir, project_id=project.project_id)
         if state.current_state == S.FAILED:
             machine.recover()
         elif state.current_state == S.SCRIPT_APPROVED:
@@ -90,6 +94,10 @@ class StoryboardWorkflow:
             write_json(path, ready.state, replace=True)
             return StoryboardWorkflowOutcome(state=ready.state, stage=stage)
         except Exception as exc:
+            if isinstance(exc, GenerationMethodNotAllowedError):
+                report = StoryboardIntegrityReport(issues=[StoryboardIntegrityIssue(
+                    code=StoryboardIntegrityIssueCode.GENERATION_METHOD_NOT_ALLOWED,
+                    message=str(exc), shot_id=exc.shot_id, source_segment_id=exc.source_segment_id)])
             # Never bind a publication whose final state publication failed.
             if machine.state.current_state != S.FAILED:
                 machine.fail(f"storyboard_execution_failed:{type(exc).__name__[:120]}")

@@ -11,6 +11,15 @@ from history_studio.models.storyboard_package import (
 from history_studio.models.visual_director_context import VisualDirectorContext
 
 
+class GenerationMethodNotAllowedError(ValueError):
+    """Safe Runtime policy diagnostic, distinct from provider exception text."""
+
+    def __init__(self, message: str, *, shot_id: str, source_segment_id: str) -> None:
+        super().__init__(message)
+        self.shot_id = shot_id
+        self.source_segment_id = source_segment_id
+
+
 class StoryboardShotSubmission(StoryboardShot):
     """Agent-owned shot fields; local shape does not authenticate source authority."""
 
@@ -70,6 +79,12 @@ def finalize_storyboard_submission(context: VisualDirectorContext,
         previous_position = -1
         covered = set()
         for shot in section.shots:
+            if validated.production_brief is not None and shot.generation_method not in validated.production_brief.allowed_generation_methods:
+                raise GenerationMethodNotAllowedError(
+                    f"Shot {shot.shot_id} generation method {shot.generation_method.value} violates "
+                    "production brief allowed_generation_methods: " + ", ".join(
+                        method.value for method in validated.production_brief.allowed_generation_methods),
+                    shot_id=shot.shot_id, source_segment_id=shot.source_segment_id)
             selected = segments.get(shot.source_segment_id)
             if selected is None:
                 raise ValueError("Shot source segment must exist in its submitted Script section")

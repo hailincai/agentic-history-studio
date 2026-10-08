@@ -146,7 +146,8 @@ def test_detachment_including_nested_values(tmp_path, monkeypatch):
 def test_context_boundary(tmp_path):
     store, ref, _ = setup(tmp_path)
     data = build_script_context(store, story_input_ref=ref).model_dump(mode="json")
-    assert set(data) == {"story_input_ref", "title", "narrative_thesis", "sections"}
+    assert set(data) == {"story_input_ref", "title", "narrative_thesis", "sections", "production_brief"}
+    assert data["production_brief"] is None
     payload = json.dumps(data)
     for hidden in ("verification_input_ref", "claim_snapshot", "sources", "evidence",
                    "research_confidence", "research_plan", "runtime_state", "workflow_history",

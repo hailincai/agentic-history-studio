@@ -4,6 +4,7 @@ from collections.abc import Callable
 from history_studio.model_io import ModelProvider
 from history_studio.models import ArtifactReference, ProjectConfig, StoryContext, StoryPackage
 from history_studio.models.base import Contract, Text
+from history_studio.models.production_brief import load_production_brief
 from history_studio.storage.artifact_store import ArtifactStore, write_json
 from history_studio.story import StoryArchitect, StoryGenerationOutcome, StoryGenerationStopReason, build_story_context
 from .states import RuntimeState, ProjectState as S
@@ -50,6 +51,7 @@ class StoryWorkflow:
                 raise ValueError("Bound Story must match approved verification")
             return StoryWorkflowOutcome(state=state)
         machine = ProjectStateMachine(state)
+        context.production_brief = load_production_brief(store.project_dir, project_id=project.project_id)
         if state.current_state == S.FAILED:
             machine.recover()
         elif state.current_state == S.FACTS_APPROVED:

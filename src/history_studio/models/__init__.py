@@ -14,6 +14,7 @@ from .verification_package import (
     ResearchFactSnapshot, VerificationPackage, create_verification_package, add_verification_result,
 )
 from .project import ProjectConfig
+from .production_brief import ProductionBrief
 from .research import EvidenceReference, ResearchFact
 from .historical_time import HistoricalTime, TimePrecision
 from .research_package import ResearchGap, ResearchPackage, ResearchPlan, ResearchProgress, ResearchRunStatus, GapStatus
@@ -44,6 +45,7 @@ __all__ = [
     "StoryContext", "StoryContextFact", "StoryPendingClaim",
     "StoryFactUse", "StoryFactReference", "StoryFactChronology", "StoryNarrativeBeat", "StorySection", "StoryStructure", "StoryPackage",
     "ArtifactReference",
+    "ProductionBrief",
     "ResearchFactSnapshot", "VerificationPackage", "create_verification_package", "add_verification_result",
     "VerificationContext", "build_verification_context",
     "VerificationEvidence", "VerificationResult", "VerificationStatus",

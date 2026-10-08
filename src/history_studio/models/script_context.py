@@ -4,6 +4,7 @@ from typing import Self
 from pydantic import Field, model_validator
 
 from .artifact_reference import ArtifactReference
+from .production_brief import ProductionBrief
 from .story_package import StoryNarrativeBeat, StorySection, StoryStructure
 
 
@@ -31,6 +32,7 @@ class ScriptContext(StoryStructure):
     """
 
     story_input_ref: ArtifactReference
+    production_brief: ProductionBrief | None = None
     sections: tuple[ScriptContextSection, ...] = Field(min_length=1)
 
     @model_validator(mode="after")

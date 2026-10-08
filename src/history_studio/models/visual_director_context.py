@@ -6,6 +6,7 @@ from pydantic import Field, model_validator
 from .artifact_reference import ArtifactReference
 from .base import Contract, Text, require_unique
 from .script_package import ScriptSection, ScriptSegment
+from .production_brief import ProductionBrief
 
 
 class VisualDirectorContextSegment(ScriptSegment):
@@ -33,6 +34,7 @@ class VisualDirectorContext(Contract):
     """
 
     script_input_ref: ArtifactReference
+    production_brief: ProductionBrief | None = None
     title: Text
     sections: tuple[VisualDirectorContextSection, ...] = Field(min_length=1)
 

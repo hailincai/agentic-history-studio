@@ -13,7 +13,7 @@ from test_visual_director_generation import FakeProvider, response, call
 
 def prepare(tmp_path):
     store = ArtifactStore(tmp_path / "project")
-    data = context().model_dump(mode="json")
+    data = context().model_dump(mode="json", exclude={"production_brief"})
     data.pop("script_input_ref")
     script = ScriptPackage(**data, story_input_ref=ArtifactReference(
         project_id="project", artifact_type="story", version=99))

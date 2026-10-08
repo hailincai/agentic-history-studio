@@ -8,6 +8,7 @@ from .base import Contract, Identifier, Text, require_unique
 from .historical_time import HistoricalTime
 from .story_package import StoryFactReference, StoryFactUse
 from .verification import VerificationEvidence, VerificationStatus
+from .production_brief import ProductionBrief
 
 
 class StoryContextFact(Contract):
@@ -59,6 +60,7 @@ class StoryContext(Contract):
     """
 
     verification_input_ref: ArtifactReference
+    production_brief: ProductionBrief | None = None
     research_input_ref: ArtifactReference
     eligible_facts: tuple[StoryContextFact, ...] = ()
     excluded_facts: tuple[StoryContextFact, ...] = ()

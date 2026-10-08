@@ -122,7 +122,8 @@ def test_detached_nested_values(tmp_path, monkeypatch):
 def test_exact_context_boundary(tmp_path):
     store, ref, _ = setup(tmp_path)
     data = build_visual_director_context(store, script_input_ref=ref).model_dump(mode="json")
-    assert set(data) == {"script_input_ref", "title", "sections"}
+    assert set(data) == {"script_input_ref", "title", "sections", "production_brief"}
+    assert data["production_brief"] is None
     assert set(data["script_input_ref"]) == {"project_id", "artifact_type", "version"}
     for section in data["sections"]:
         assert set(section) == {"section_id", "title", "segments"}

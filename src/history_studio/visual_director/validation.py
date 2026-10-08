@@ -26,6 +26,7 @@ class StoryboardIntegrityIssueCode(StrEnum):
     SHOT_KIND_MISMATCH = "SHOT_KIND_MISMATCH"
     SEGMENT_ORDER_REGRESSION = "SEGMENT_ORDER_REGRESSION"
     SHOT_ID_DUPLICATE = "SHOT_ID_DUPLICATE"
+    GENERATION_METHOD_NOT_ALLOWED = "GENERATION_METHOD_NOT_ALLOWED"
 
 
 class StoryboardIntegrityIssue(Contract):
@@ -123,6 +124,10 @@ def validate_storyboard_integrity(context: VisualDirectorContext,
         previous_segment = -1
         for shot in section.shots:
             shot_loc = loc | dict(shot_id=shot.shot_id, source_segment_id=shot.source_segment_id)
+            if source.production_brief is not None and shot.generation_method not in source.production_brief.allowed_generation_methods:
+                issue(code.GENERATION_METHOD_NOT_ALLOWED,
+                      f"Generation method {shot.generation_method} violates production brief allowed_generation_methods: "
+                      + ", ".join(method.value for method in source.production_brief.allowed_generation_methods), **shot_loc)
             if shot.shot_id in seen_shots:
                 issue(code.SHOT_ID_DUPLICATE, "Shot ID is repeated globally", **shot_loc)
             seen_shots.add(shot.shot_id)
