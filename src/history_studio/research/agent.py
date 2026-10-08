@@ -25,6 +25,7 @@ from .diagnostics import (
     validation_diagnostic, request_diagnostic,
 )
 from .usage import LimitReached, UsageLedger
+from history_studio.budget import BudgetExceeded
 from .evidence_diagnostics import evidence_mismatch
 from .web_tools import canonical_url, normalize_text, source_reference
 
@@ -316,7 +317,7 @@ class ResearchAgent:
                     observation = (call, output)
                 else:
                     raise LimitReached("turn_limit")
-            except (LimitReached, ContextLimitError) as exc:
+            except (LimitReached, ContextLimitError, BudgetExceeded) as exc:
                 package.progress = ResearchProgress(run_id=ledger.run_id, iterations=ledger.iterations_started,
                     status=ResearchRunStatus.LIMIT_REACHED, stop_reason=str(exc))
                 self._checkpoint(package, store)

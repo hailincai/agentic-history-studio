@@ -33,6 +33,8 @@ def create_project(args: argparse.Namespace, path: Path) -> None:
     path.mkdir(parents=True, exist_ok=False)
     write_json(path / "project.json", config)
     write_json(path / ".runtime" / "state.json", RuntimeState())
+    from history_studio.budget import ProjectBudget
+    ProjectBudget(path, stage="initialization").initialize_new()
     print(f"Created project {config.project_id}: {config.topic} [CREATED]")
 
 
@@ -51,6 +53,11 @@ def show_status(path: Path, config: ProjectConfig, state: RuntimeState) -> None:
     if state.latest_error:
         print(f"Latest error: {state.latest_error}")
     show_validation_diagnostic(path)
+    from history_studio.budget import ProjectBudget
+    if (path / ".runtime/project_budget.json").exists():
+        print(f"Project budget accounting (configured prices, not invoice): {ProjectBudget(path, stage='status').snapshot()}")
+    else:
+        print("Project budget ledger missing: paid execution requires explicit reconciliation.")
     store = ArtifactStore(path)
     print("Latest artifact versions:")
     found = False
@@ -170,6 +177,9 @@ def main(argv: list[str] | None = None) -> int:
     create.add_argument("--budget", type=float, default=20)
     create.add_argument("--width", type=int, default=1280)
     create.add_argument("--height", type=int, default=720)
+    reconcile = commands.add_parser("budget-reconcile", help="Explicit historical paid usage initialization; never resets an existing budget")
+    reconcile.add_argument("project_id")
+    reconcile.add_argument("--reconciliation-file", type=Path, required=True)
     for command in ("status", "review", "resume"):
         subparser = commands.add_parser(command)
         subparser.add_argument("project_id")
@@ -208,6 +218,11 @@ def main(argv: list[str] | None = None) -> int:
             config, state = read_project(path)
             if args.command == "status":
                 show_status(path, config, state)
+            elif args.command == "budget-reconcile":
+                from history_studio.budget import ProjectBudget, BudgetReconciliation
+                record = BudgetReconciliation.model_validate_json(args.reconciliation_file.read_text(encoding="utf-8"))
+                ProjectBudget(path, stage="reconciliation").initialize(record)
+                print("Historical project budget initialized; workflow state and bindings unchanged.")
             elif args.command == "research":
                 return run_research(path, config, args.config)
             elif args.command == "verify":
@@ -276,6 +291,8 @@ def run_research(path: Path, project: ProjectConfig, config_path: Path | None) -
     except ValueError as exc:
         raise ValueError("Invalid research configuration; check the documented schema (credentials belong only in the environment)") from exc
     client = create_client(config.provider)
+    from history_studio.budget import attach_budget
+    attach_budget(client, path, "research")
     try:
         agent = ResearchAgent(OpenAIResearchProvider(client, config.provider),
                               OpenAIWebTools(client, config.provider), config.research, emit=print)
@@ -304,6 +321,8 @@ def run_verification(path: Path, project: ProjectConfig, config_path: Path | Non
         nonlocal client
         if client is None:
             client = create_client(configuration.provider)
+            from history_studio.budget import attach_budget
+            attach_budget(client, path, "verify")
         return client
     provider = configuration.provider
     runner = FactCheckingRunner(
@@ -344,6 +363,8 @@ def run_story(path: Path, project: ProjectConfig, config_path: Path | None) -> i
         nonlocal client
         if client is None:
             client = create_client(configuration.provider)
+            from history_studio.budget import attach_budget
+            attach_budget(client, path, "story")
         provider = configuration.provider
         return OpenAIModelProvider(client, provider.model,
             provider.input_usd_per_million, provider.output_usd_per_million)
@@ -371,6 +392,8 @@ def run_script(path: Path, project: ProjectConfig, config_path: Path | None) -> 
         nonlocal client
         if client is None:
             client = create_client(configuration.provider)
+            from history_studio.budget import attach_budget
+            attach_budget(client, path, "script")
         provider = configuration.provider
         return OpenAIModelProvider(client, provider.model,
             provider.input_usd_per_million, provider.output_usd_per_million)
@@ -402,6 +425,8 @@ def run_storyboard(path: Path, project: ProjectConfig, config_path: Path | None)
         nonlocal client
         if client is None:
             client = create_client(configuration.provider)
+            from history_studio.budget import attach_budget
+            attach_budget(client, path, "storyboard")
         provider = configuration.provider
         return OpenAIModelProvider(client, provider.model,
             provider.input_usd_per_million, provider.output_usd_per_million)
@@ -440,11 +465,15 @@ def run_media(path: Path, project: ProjectConfig, config_path: Path | None) -> i
             raise ValueError("Media requires --config MediaConfiguration (or .runtime/media_config.json); no fake fallback")
         try:
             configuration.validate_for(storyboard)
+            configuration.validate_guarded_prices(storyboard)
             client = create_client(OpenAIConfiguration(timeout_seconds=configuration.timeout_seconds))
+            from history_studio.budget import attach_budget
+            attach_budget(client, path, "media")
         except ValueError as exc:
             print(f"Invalid media provider configuration: {exc}", file=sys.stderr)
             raise
-        return MediaProviders(tts=OpenAITTSProvider(client, model=configuration.tts_model, voice=configuration.tts_voice),
+        return MediaProviders(tts=OpenAITTSProvider(client, model=configuration.tts_model, voice=configuration.tts_voice,
+            usd_per_million_characters=configuration.tts_usd_per_million_characters),
             image=(OpenAIImageProvider(client, model=configuration.image_model, size=configuration.image_size)
                    if configuration.image_model else None),
             video=(OpenAIVideoProvider(client, model=configuration.video_model, size=configuration.video_size,

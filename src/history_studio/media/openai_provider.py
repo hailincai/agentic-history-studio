@@ -13,6 +13,7 @@ from history_studio.models.base import Contract, Text
 from .image import ImageGenerationResult
 from .tts import TTSResult
 from .video import VideoGenerationResult
+from history_studio import budget
 
 
 class MediaConfiguration(Contract):
@@ -28,6 +29,7 @@ class MediaConfiguration(Contract):
     video_poll_attempts: int = Field(default=60, strict=True, gt=0, le=300)
     video_poll_interval_seconds: float = Field(default=2, gt=0, le=30, allow_inf_nan=False)
     timeout_seconds: float = Field(default=60, gt=0, le=300, allow_inf_nan=False)
+    tts_usd_per_million_characters: float | None = Field(default=None, gt=0, allow_inf_nan=False)
 
     def validate_for(self, storyboard: StoryboardPackage) -> None:
         methods = {shot.generation_method for section in storyboard.sections for shot in section.shots}
@@ -35,6 +37,16 @@ class MediaConfiguration(Contract):
             raise ValueError("Media configuration requires image_model for approved image methods")
         if methods & {GenerationMethod.TEXT_TO_VIDEO, GenerationMethod.IMAGE_TO_VIDEO} and self.video_model is None:
             raise ValueError("Media configuration requires video_model for approved video methods")
+
+    def validate_guarded_prices(self, storyboard: StoryboardPackage) -> None:
+        """Reject known unsupported batch requirements before even the first TTS."""
+        methods = {shot.generation_method for section in storyboard.sections for shot in section.shots}
+        if methods & {GenerationMethod.TEXT_TO_VIDEO, GenerationMethod.IMAGE_TO_VIDEO}:
+            raise budget.UnsupportedPrice("Guarded video is disabled: no durable asynchronous charge rule")
+        if GenerationMethod.STATIC_IMAGE in methods:
+            raise budget.UnsupportedPrice("Guarded image is disabled: no enforceable output-usage price bound")
+        if self.tts_model not in ("tts-1", "tts-1-hd") or self.tts_usd_per_million_characters is None:
+            raise budget.UnsupportedPrice("Guarded TTS requires an explicit supported character price")
 
 
 def _binary(response) -> bytes:
@@ -48,14 +60,19 @@ def _binary(response) -> bytes:
 
 
 class OpenAITTSProvider:
-    def __init__(self, client: OpenAI, *, model: str, voice: str) -> None:
+    def __init__(self, client: OpenAI, *, model: str, voice: str,
+                 usd_per_million_characters: float | None = None) -> None:
         self.client, self.model, self.voice = client, model, voice
+        self.usd_per_million_characters = usd_per_million_characters
 
     def synthesize(self, *, text: str) -> TTSResult:
         if not text.strip() or len(text) > 4096:
             raise ValueError("OpenAI speech requires non-empty text of at most 4096 characters; narration is not split or rewritten")
-        response = self.client.audio.speech.create(input=text, model=self.model, voice=self.voice, response_format="wav")
-        return TTSResult(audio_bytes=_binary(response), provider="openai", model=self.model)
+        data = budget.require_budget(self.client).tts(model=self.model, voice=self.voice, text=text,
+            usd_per_million_characters=self.usd_per_million_characters,
+            call=lambda: _binary(self.client.audio.speech.create(
+                input=text, model=self.model, voice=self.voice, response_format="wav")))
+        return TTSResult(audio_bytes=data, provider="openai", model=self.model)
 
 
 class OpenAIImageProvider:
@@ -67,6 +84,7 @@ class OpenAIImageProvider:
     def generate(self, *, prompt: str) -> ImageGenerationResult:
         if not prompt.strip():
             raise ValueError("Image generation requires a non-empty approved prompt")
+        budget.require_budget(self.client).disabled("images.generate")
         response = self.client.images.generate(prompt=prompt, model=self.model, n=1, output_format="png", size=self.size)
         if not response.data or len(response.data) != 1 or not response.data[0].b64_json:
             raise ValueError("OpenAI image response must contain exactly one base64 image; URL fallback is unsupported")
@@ -102,6 +120,7 @@ class OpenAIVideoProvider:
     def _generate(self, *, prompt: str, image: bytes | None = None) -> VideoGenerationResult:
         if not prompt.strip():
             raise ValueError("Video generation requires a non-empty approved prompt")
+        budget.require_budget(self.client).disabled("videos.create/retrieve/download")
         kwargs = dict(prompt=prompt, model=self.model, size=self.size, seconds=self.seconds)
         if image is not None:
             if not isinstance(image, bytes) or not image.startswith(b"\x89PNG\r\n\x1a\n"):

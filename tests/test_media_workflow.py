@@ -347,6 +347,12 @@ def test_cli_incomplete_configuration_fails_before_client(prepared, monkeypatch,
 
 
 def test_cli_concrete_wiring_runs_only_mocked_sdk_and_closes_client(prepared, monkeypatch):
+    # Transport wiring uses an explicit fake budget; real guarded preflight is
+    # exercised separately and disables image calls without a bounded price.
+    from budget_transport_helpers import TransportOnlyBudget
+    from history_studio.media.openai_provider import MediaConfiguration
+    monkeypatch.setattr("history_studio.budget.require_budget", lambda client: TransportOnlyBudget())
+    monkeypatch.setattr(MediaConfiguration, "validate_guarded_prices", lambda self, storyboard: None)
     import base64
     import httpx
     from history_studio.cli import main
@@ -374,6 +380,24 @@ def test_cli_concrete_wiring_runs_only_mocked_sdk_and_closes_client(prepared, mo
         assert len(requests) == 5  # Two represented segments, three final static visuals.
         assert client.is_closed()
     assert read(store).current_state == S.ASSEMBLING and read(store).artifacts.media == ref("media")
+
+
+def test_cli_guarded_media_blocks_before_client_or_tts(prepared, monkeypatch, capsys):
+    from history_studio.cli import main
+    import history_studio.research.openai_provider as provider_module
+    _, store, _ = prepared
+    version = store.save("storyboard", storyboard_package())
+    data = read(store).model_dump(mode="json")
+    data["artifacts"]["approved_storyboard"] = ref("storyboard", version).model_dump(mode="json")
+    write_json(store.project_dir / ".runtime/state.json", RuntimeState.model_validate(data), replace=True)
+    authority = read(store).artifacts
+    config = store.project_dir / "media-settings.json"
+    config.write_text(json.dumps(dict(tts_model="tts-1", tts_voice="alloy", image_model="gpt-image-1")))
+    monkeypatch.setattr(provider_module, "create_client", lambda configuration: pytest.fail("No SDK client before price preflight"))
+    assert main(["--projects-dir", str(store.project_dir.parent), "media", "project", "--config", str(config)]) == 1
+    assert "Guarded image is disabled" in capsys.readouterr().err
+    assert read(store).artifacts == authority
+    assert read(store).artifacts.media is None
 
 
 def test_approved_storyboard_replacement_invalidates_media(prepared):

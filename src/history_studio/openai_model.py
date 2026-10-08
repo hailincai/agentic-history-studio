@@ -4,6 +4,7 @@ from typing import Any
 from openai import OpenAI
 
 from .model_io import ModelRequest, ModelResponse, NativeToolCall, Usage
+from . import budget
 
 
 def usage_of(response: Any, input_rate: float, output_rate: float, tool_cost: float = 0) -> Usage:
@@ -27,7 +28,10 @@ class OpenAIModelProvider:
 
     def decide(self, request: ModelRequest) -> ModelResponse:
         """One SDK request, no loop, retry, tool execution, or domain interpretation."""
-        response = self.client.responses.create(**self.request_body(request))
+        body = self.request_body(request)
+        response = budget.require_budget(self.client).responses(body,
+            lambda: self.client.responses.create(**body),
+            input_rate=self.input_rate, output_rate=self.output_rate)
         calls = [NativeToolCall(call_id=item.call_id, name=item.name, arguments=item.arguments)
                  for item in response.output if item.type == "function_call"]
         text = "".join(content.text for item in response.output if item.type == "message"

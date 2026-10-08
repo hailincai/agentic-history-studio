@@ -10,6 +10,7 @@ from history_studio.models.base import Contract, Nonnegative, Text
 from history_studio.models.sources import SourceReference
 from history_studio.model_io import ModelRequest
 from history_studio.openai_model import OpenAIModelProvider, usage_of
+from history_studio import budget
 from .actions import action_contracts
 from .boundaries import ModelReply, ToolCall, ToolObservation, Usage
 from .config import ResearchSettings
@@ -217,7 +218,14 @@ class OpenAIWebTools:
                 / 1_000_000 + self.config.search_call_usd)
 
     def search_web(self, query: str) -> ToolObservation:
-        response = self.client.responses.create(**self._request(query))
+        body = self._request(query)
+        response = budget.require_budget(self.client).responses(body,
+            lambda: self.client.responses.create(**body),
+            input_rate=self.config.search_input_usd_per_million,
+            output_rate=self.config.search_output_usd_per_million,
+            overhead_tokens=self.config.request_overhead_tokens,
+            search_content_tokens=self.config.search_content_tokens,
+            search_call_usd=self.config.search_call_usd)
         if response.status != "completed":
             raise RuntimeError("incomplete_search_response")
         searches = [item for item in response.output if item.type == "web_search_call"]
