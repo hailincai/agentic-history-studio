@@ -148,13 +148,15 @@ def test_new_output_clears_only_downstream_and_requires_active_stage():
     def ref(kind, version=1):
         return ArtifactReference(project_id="project", artifact_type=kind, version=version)
     bindings = WorkflowArtifactBindings(**{key: ref(key.removeprefix("approved_"))
-        for key in WorkflowArtifactBindings.model_fields})
+        for key in WorkflowArtifactBindings.model_fields if key != "assembly"})
     machine = ProjectStateMachine(RuntimeState(current_state=S.SCRIPT_GENERATING,
         last_successful_state=S.STORY_APPROVED, artifacts=bindings))
     changed = machine.complete_script(ref("script", 2), project_id="project").artifacts
+    assert changed.script == ref("script", 2)
     for key in ("research", "verification", "approved_verification", "story", "approved_story"):
         assert getattr(changed, key) == getattr(bindings, key)
-    assert all(getattr(changed, key) is None for key in ("approved_script", "storyboard", "approved_storyboard"))
+    assert all(getattr(changed, key) is None for key in
+               ("approved_script", "storyboard", "approved_storyboard", "media", "assembly"))
     with pytest.raises(ValueError):
         ProjectStateMachine().complete_script(ref("script"), project_id="project")
 

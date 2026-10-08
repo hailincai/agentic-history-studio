@@ -177,11 +177,12 @@ def test_new_candidate_invalidates_only_downstream_and_requires_active_stage():
     def ref(kind, version=1):
         return ArtifactReference(project_id="project", artifact_type=kind, version=version)
     bindings = WorkflowArtifactBindings(**{key: ref(key.removeprefix("approved_"))
-        for key in WorkflowArtifactBindings.model_fields})
+        for key in WorkflowArtifactBindings.model_fields if key != "assembly"})
     machine = ProjectStateMachine(RuntimeState(current_state=S.STORYBOARD_GENERATING,
         last_successful_state=S.SCRIPT_APPROVED, artifacts=bindings))
     changed = machine.complete_storyboard(ref("storyboard", 2), project_id="project").artifacts
     assert changed.storyboard.version == 2 and changed.approved_storyboard is None
+    assert changed.media is None and changed.assembly is None
     for key in ("research", "verification", "approved_verification", "story", "approved_story", "script", "approved_script"):
         assert getattr(changed, key) == getattr(bindings, key)
     with pytest.raises(ValueError):

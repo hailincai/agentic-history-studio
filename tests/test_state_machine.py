@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from history_studio.models import (Storyboard, ArtifactReference, VerificationPackage,
+from history_studio.models import (StoryboardPackage, ScriptPackage, ArtifactReference, VerificationPackage,
     create_verification_package, add_verification_result)
 from history_studio.storage import ArtifactStore
 from history_studio.workflow import (
@@ -68,13 +68,6 @@ def test_full_workflow_with_persisted_human_gates(tmp_path: Path) -> None:
     for stage, approved, generating, waiting in gates:
         with pytest.raises(InvalidTransitionError):
             machine.transition(approved)
-        artifacts = {
-            "facts": artifact(),
-            "storyboard": Storyboard(shots=[dict(shot_id="shot1", scene_id="s1", sequence=1,
-                start_seconds=0, duration_seconds=10, visual_description="river", location="China",
-                period="Tang", generation_method="STATIC_IMAGE", camera_motion="none", prompt="river")],
-                estimated_media_cost_usd=0),
-        }
         decision_version = 1
         if stage == "story":
             from history_studio.story import build_story_context, StorySubmission, finalize_story_submission
@@ -100,11 +93,40 @@ def test_full_workflow_with_persisted_human_gates(tmp_path: Path) -> None:
             bindings = machine.state.artifacts.with_script(ref("script", decision_version))
             machine = ProjectStateMachine(RuntimeState(current_state=S.WAITING_SCRIPT_APPROVAL,
                 last_successful_state=S.WAITING_SCRIPT_APPROVAL, artifacts=bindings))
+        elif stage == "storyboard":
+            from history_studio.visual_director import (
+                build_visual_director_context, StoryboardSubmission, finalize_storyboard_submission,
+            )
+            from history_studio.workflow.storyboard_review import load_storyboard_review
+            script_ref = machine.state.require_approved_script_ref("li_bai")
+            script = store.load("script", script_ref.version, ScriptPackage)
+            context = build_visual_director_context(store, script_input_ref=script_ref)
+            proposal = StoryboardSubmission(title=script.title, sections=[dict(
+                section_id=section.section_id, title=section.title, shots=[dict(
+                    shot_id=f"shot-{segment.segment_id}", kind=segment.kind,
+                    source_segment_id=segment.segment_id, visual_description="river",
+                    generation_prompt="river", generation_method="STATIC_IMAGE",
+                    framing="WIDE", camera_motion="NONE", estimated_duration_seconds=10)
+                    for segment in section.segments]) for section in script.sections])
+            candidate = finalize_storyboard_submission(context, proposal)
+            assert candidate.script_input_ref == script_ref
+            decision_version = store.save("storyboard", candidate)
+            candidate_ref = ref("storyboard", decision_version)
+            assert store.load("storyboard", decision_version, StoryboardPackage) == candidate
+            machine.complete_storyboard(candidate_ref, project_id="li_bai")
+            assert machine.state.current_state == S.WAITING_STORYBOARD_APPROVAL
+            assert machine.state.require_storyboard_ref("li_bai") == candidate_ref
+            assert machine.state.require_approved_script_ref("li_bai") == script_ref
+            assert load_storyboard_review(machine.state, store) == candidate
         else:
-            store.save("verification" if stage == "facts" else stage, artifacts[stage])
+            decision_version = store.save("verification", artifact())
         assert machine.apply_human_decision(record(stage, version=decision_version), store).current_state == approved
+        if stage == "storyboard":
+            assert machine.state.require_approved_storyboard_ref("li_bai") == candidate_ref
+            assert machine.state.require_approved_script_ref("li_bai") == script_ref
         machine.transition(generating)
-        machine.transition(waiting)
+        if generating != S.STORYBOARD_GENERATING:
+            machine.transition(waiting)
     machine = ProjectStateMachine(RuntimeState(current_state=S.ASSEMBLING, last_successful_state=S.STORYBOARD_APPROVED,
         artifacts=machine.state.artifacts.with_media(ref("media"))))
     machine.complete_assembly(ref("assembly"), project_id="li_bai")
