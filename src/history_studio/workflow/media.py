@@ -1,4 +1,4 @@
-"""One-writer Phase 7 publication; immutable binaries/manifests are not transactions."""
+"""Journaled Phase 7 execution; immutable binaries/manifests are not transactions."""
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -7,6 +7,9 @@ from history_studio.media.image import ImageProvider
 from history_studio.media.tts import TTSProvider
 from history_studio.media.video import VideoProvider
 from history_studio.media.validation import MediaIntegrityReport, validate_media_package
+from history_studio.media.recovery import AssetRecovery, RecoveryScope, provider_identity
+import hashlib
+from history_studio.budget import ledger_lock
 from history_studio.models import ArtifactReference, GenerationMethod, MediaPackage, ProjectConfig, ScriptPackage, StoryboardPackage
 from history_studio.models.base import Contract, Text
 from history_studio.storage import ArtifactStore, MediaIntegrityError, MediaStore
@@ -21,6 +24,9 @@ class MediaProviders:
     tts: TTSProvider
     image: ImageProvider | None = None
     video: VideoProvider | None = None
+    # Custom providers must declare any request settings not exposed by the
+    # standard adapters here; mutable call counters are never configuration.
+    recovery_identity: dict | None = None
 
 
 class MediaWorkflowOutcome(Contract):
@@ -33,10 +39,11 @@ class MediaWorkflowOutcome(Contract):
 class MediaWorkflow:
     """Only exact approved inputs and bound outputs confer workflow authority.
 
-    Retry regenerates through deterministic services, never adopts orphan outputs.
+    Retry reuses only exact verified completed journal entries, never orphans.
     Binary/manifest/state publication is not a transaction. Failures before binding
     retain upstream approval and may leave orphans. A hard crash leaves GENERATING_MEDIA
-    for retry. ASSEMBLING reruns authenticate exact bound media without providers.
+    and durable dispatch evidence. ASSEMBLING reruns authenticate exact bound media
+    without providers or recovery-journal discovery.
     """
 
     def __init__(self, *, provider_factory: Callable[[StoryboardPackage], MediaProviders]) -> None:
@@ -102,8 +109,13 @@ class MediaWorkflow:
             machine.recover()
         machine.begin_media(project_id=project.project_id)
         report = None
+        state_lock = store.project_dir / ".runtime/media_state.lock"
         try:
-            write_json(path, machine.state, replace=True)
+            with ledger_lock(state_lock):
+                current = RuntimeState.model_validate_json(path.read_text(encoding="utf-8"))
+                if current.artifacts != machine.state.artifacts:
+                    raise ValueError("Concurrent media authority changed; no dispatch authorized")
+                write_json(path, machine.state, replace=True)
             storyboard, script_ref, script = sources()
             providers = self.provider_factory(StoryboardPackage.model_validate(storyboard.model_dump(mode="json")))
             if not isinstance(providers, MediaProviders) or providers.tts is None:
@@ -113,10 +125,20 @@ class MediaWorkflow:
                 raise ValueError("Approved Storyboard requires an image provider before narration execution")
             if methods & {GenerationMethod.TEXT_TO_VIDEO, GenerationMethod.IMAGE_TO_VIDEO} and providers.video is None:
                 raise ValueError("Approved Storyboard requires a video provider before narration execution")
+            identities = dict(tts=provider_identity(providers.tts), image=provider_identity(providers.image),
+                              video=provider_identity(providers.video), explicit=providers.recovery_identity)
+            config_path = store.project_dir / ".runtime/media_config.json"
+            if config_path.exists():
+                identities["media_config_sha256"] = hashlib.sha256(config_path.read_bytes()).hexdigest()
+            recovery = AssetRecovery(store.project_dir, RecoveryScope(project_id=project.project_id,
+                storyboard_ref=reference, script_ref=script_ref,
+                storyboard_sha256=hashlib.sha256((store.project_dir / "storyboard" / f"storyboard_v{reference.version}.json").read_bytes()).hexdigest(),
+                script_sha256=hashlib.sha256((store.project_dir / "script" / f"script_v{script_ref.version}.json").read_bytes()).hexdigest(),
+                providers=identities, media_root=str(binaries.root)))
             narration = generate_narration_assets(storyboard_input_ref=reference, artifact_store=store,
-                                                  provider=providers.tts, media_store=binaries)
+                                                  provider=providers.tts, media_store=binaries, recovery=recovery)
             visuals = generate_visual_assets(storyboard_input_ref=reference, artifact_store=store, media_store=binaries,
-                                              image_provider=providers.image, video_provider=providers.video)
+                                              image_provider=providers.image, video_provider=providers.video, recovery=recovery)
             package = MediaPackage(storyboard_input_ref=reference, title=storyboard.title,
                                    narration_assets=narration, visual_assets=visuals)
             report = authenticate(package, storyboard, script_ref, script)
@@ -132,9 +154,17 @@ class MediaWorkflow:
             ready = ProjectStateMachine(machine.state)
             ready.complete_media(ArtifactReference(project_id=project.project_id, artifact_type="media", version=version),
                                  project_id=project.project_id)
-            write_json(path, ready.state, replace=True)
+            with ledger_lock(state_lock):
+                current = RuntimeState.model_validate_json(path.read_text(encoding="utf-8"))
+                if current.artifacts != machine.state.artifacts:
+                    raise ValueError("Concurrent media authority changed; no alternate binding authorized")
+                write_json(path, ready.state, replace=True)
             return MediaWorkflowOutcome(state=ready.state, package=durable, validation_report=report)
         except Exception as exc:
-            machine.fail(f"media_execution_failed:{type(exc).__name__[:120]}")
-            write_json(path, machine.state, replace=True)
-            return MediaWorkflowOutcome(state=machine.state, error_type=type(exc).__name__[:120], validation_report=report)
+            with ledger_lock(state_lock):
+                current = RuntimeState.model_validate_json(path.read_text(encoding="utf-8"))
+                if current.artifacts == machine.state.artifacts:
+                    machine.fail(f"media_execution_failed:{type(exc).__name__[:120]}")
+                    write_json(path, machine.state, replace=True)
+                    current = machine.state
+            return MediaWorkflowOutcome(state=current, error_type=type(exc).__name__[:120], validation_report=report)

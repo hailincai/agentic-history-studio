@@ -7,9 +7,15 @@ from history_studio.models import (
     MediaType, StoryboardPackage, VisualAsset,
 )
 from history_studio.storage import ArtifactStore, MediaIntegrityError, MediaStore
+from history_studio.models.base import Contract
 
 from .image import ImageGenerationResult, ImageProvider
 from .video import VideoGenerationResult, VideoProvider
+
+
+class PersistedVisual(Contract):
+    asset: MediaAssetReference
+    metadata: GenerationMetadata
 
 
 def _persist_image(result: ImageGenerationResult, *, digest: str, version: int,
@@ -55,7 +61,7 @@ def _persist_video(result: VideoGenerationResult, *, digest: str, version: int,
 def generate_visual_assets(*, storyboard_input_ref: ArtifactReference,
                            artifact_store: ArtifactStore, media_store: MediaStore,
                            image_provider: ImageProvider | None = None,
-                           video_provider: VideoProvider | None = None) -> tuple[VisualAsset, ...]:
+                           video_provider: VideoProvider | None = None, recovery=None) -> tuple[VisualAsset, ...]:
     """One final asset per exact shot in section/shot presentation order.
 
     Caller supplies the approved Storyboard reference; approval enforcement remains
@@ -65,8 +71,9 @@ def generate_visual_assets(*, storyboard_input_ref: ArtifactReference,
     MediaStore owns hashing, containment, immutable publication and exact reads.
 
     IMAGE_TO_VIDEO persists an intermediate PNG and reads verified persisted bytes
-    before video generation. Retries explicitly regenerate and require identical
-    bytes at immutable paths; existing outputs are never discovered/adopted.
+    before video generation. With recovery, each intermediate/final dispatch has
+    separate durable evidence. Without it, retries regenerate and require identical
+    bytes at immutable paths. Existing outputs are never discovered/adopted.
     Failures raise, leaving any successful earlier publications as orphan binaries.
     No partial successful tuple, manifest publication or workflow state mutation.
     """
@@ -94,20 +101,49 @@ def generate_visual_assets(*, storyboard_input_ref: ArtifactReference,
         identity = json.dumps([reference.model_dump(mode="json"), storyboard.script_input_ref.model_dump(mode="json"),
                                shot.shot_id], sort_keys=True, separators=(",", ":"))
         digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+        def persist(kind, intermediate, call, request):
+            prefix = "img" if intermediate else "vis"
+            expected_type = MediaType.IMAGE if kind == "image" else MediaType.VIDEO
+            role = "intermediate/" if intermediate else ""
+            expected_path = (f"images/storyboard-v{reference.version}/{role}{digest}.png" if kind == "image"
+                             else f"video/storyboard-v{reference.version}/{digest}.mp4")
+            def execute():
+                if recovery is not None and (media_store.root / expected_path).exists():
+                    raise ValueError("Unjournaled visual output cannot authorize another dispatch")
+                result = call()
+                if kind == "image":
+                    asset, metadata = _persist_image(result, digest=digest, version=reference.version,
+                                                    intermediate=intermediate, media_store=media_store)
+                else:
+                    asset, metadata = _persist_video(result, digest=digest, version=reference.version, media_store=media_store)
+                return PersistedVisual(asset=asset, metadata=metadata)
+            def validate(value):
+                if (value.asset.asset_id != f"{prefix}-{digest}" or value.asset.relative_path != expected_path
+                    or value.asset.media_type != expected_type):
+                    raise ValueError("Recovered visual identity mismatch")
+                provider = image_provider if kind == "image" else video_provider
+                if getattr(provider, "model", value.metadata.model) != value.metadata.model:
+                    raise ValueError("Recovered visual provider model mismatch")
+                if not media_store.read_bytes(value.asset):
+                    raise ValueError("Recovered visual must contain non-empty bytes")
+            value = execute() if recovery is None else recovery.perform(
+                key=f"{kind}:{'intermediate:' if intermediate else ''}{shot.shot_id}", request=request,
+                result_type=PersistedVisual, execute=execute, validate=validate)
+            return value.asset, value.metadata
+
         if shot.generation_method == GenerationMethod.STATIC_IMAGE:
-            result = image_provider.generate(prompt=shot.generation_prompt)
-            asset, metadata = _persist_image(result, digest=digest, version=reference.version,
-                                            intermediate=False, media_store=media_store)
+            asset, metadata = persist("image", False, lambda: image_provider.generate(prompt=shot.generation_prompt),
+                                      {"prompt": shot.generation_prompt, "method": "STATIC_IMAGE"})
         elif shot.generation_method == GenerationMethod.TEXT_TO_VIDEO:
-            result = video_provider.generate_from_text(prompt=shot.generation_prompt)
-            asset, metadata = _persist_video(result, digest=digest, version=reference.version, media_store=media_store)
+            asset, metadata = persist("video", False, lambda: video_provider.generate_from_text(prompt=shot.generation_prompt),
+                                      {"prompt": shot.generation_prompt, "method": "TEXT_TO_VIDEO"})
         elif shot.generation_method == GenerationMethod.IMAGE_TO_VIDEO:
-            image_result = image_provider.generate(prompt=shot.generation_prompt)
-            intermediate, _ = _persist_image(image_result, digest=digest, version=reference.version,
-                                             intermediate=True, media_store=media_store)
+            intermediate, _ = persist("image", True, lambda: image_provider.generate(prompt=shot.generation_prompt),
+                                       {"prompt": shot.generation_prompt, "method": "IMAGE_TO_VIDEO_INTERMEDIATE"})
             image = media_store.read_bytes(intermediate)
-            result = video_provider.generate_from_image(image=image, prompt=shot.generation_prompt)
-            asset, metadata = _persist_video(result, digest=digest, version=reference.version, media_store=media_store)
+            asset, metadata = persist("video", False,
+                lambda: video_provider.generate_from_image(image=image, prompt=shot.generation_prompt),
+                {"prompt": shot.generation_prompt, "method": "IMAGE_TO_VIDEO", "image_sha256": intermediate.sha256})
         else:
             raise ValueError(f"Unsupported generation method: {shot.generation_method}")
         assets.append(VisualAsset(shot_id=shot.shot_id, source_segment_id=shot.source_segment_id,

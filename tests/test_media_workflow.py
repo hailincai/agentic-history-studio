@@ -157,6 +157,13 @@ def test_failure_preserves_approval_no_binding_and_retry_never_adopts_orphans(pr
     monkeypatch.setattr(module, "write_json", write)
     monkeypatch.setattr(module, "generate_narration_assets", narration)
     monkeypatch.setattr(store, "load_latest", lambda *args: pytest.fail("No latest lookup"))
+    if failure in ("tts", "visual", "binary_save"):
+        before = (len(providers.tts.texts), len(providers.image.prompts), len(providers.video.calls))
+        resumed = workflow(providers).run(project, store, media_store=binaries)
+        assert resumed.state.current_state == S.FAILED and resumed.error_type == "UncertainMediaRequest"
+        assert resumed.state.artifacts == upstream
+        assert before == (len(providers.tts.texts), len(providers.image.prompts), len(providers.video.calls))
+        return
     resumed = workflow(providers).run(project, store, media_store=binaries)
     assert resumed.state.current_state == S.ASSEMBLING
     assert resumed.state.artifacts.media.version == (2 if expected_orphan else 1)

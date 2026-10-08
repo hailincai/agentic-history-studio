@@ -13,7 +13,7 @@ from .tts import TTSProvider, TTSResult
 
 def generate_narration_assets(*, storyboard_input_ref: ArtifactReference,
                               artifact_store: ArtifactStore, provider: TTSProvider,
-                              media_store: MediaStore) -> tuple[NarrationAsset, ...]:
+                              media_store: MediaStore, recovery=None) -> tuple[NarrationAsset, ...]:
     """Load exact Storyboard -> exact Script; synthesize represented segments once.
 
     Caller supplies the approved Storyboard reference. This service authenticates
@@ -21,8 +21,9 @@ def generate_narration_assets(*, storyboard_input_ref: ArtifactReference,
     No caller-supplied Script payload, latest lookup, semantic rewrite or state write.
     All input validation happens before TTS. A later execution failure raises without
     a partial result; earlier immutable binary publications can remain as orphans.
-    Retries synthesize again and accept identical bytes only. Regeneration/version
-    policy and adoption of orphan assets remain future workflow responsibilities.
+    Without a recovery executor, retries synthesize again and require identical
+    bytes. MediaWorkflow supplies exact journal evidence for completed-asset reuse;
+    neither mode discovers or adopts unbound binaries.
     """
     reference = ArtifactReference.model_validate(storyboard_input_ref.model_dump(mode="json"))
     if reference.artifact_type != "storyboard":
@@ -52,17 +53,32 @@ def generate_narration_assets(*, storyboard_input_ref: ArtifactReference,
         identity = json.dumps([reference.model_dump(mode="json"), script_ref.model_dump(mode="json"),
                                segment.segment_id], sort_keys=True, separators=(",", ":"))
         digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
-        result = provider.synthesize(text=segment.narration)
-        if not isinstance(result, TTSResult) or result.audio_format != "wav":
-            raise ValueError("TTS provider must return a WAV TTSResult")
-        metadata = GenerationMetadata(provider=result.provider, model=result.model)
-        # Reject invalid audio before publication; final duration comes from an
-        # integrity-checked read of the exact persisted artifact, not the provider.
-        measure_wav_duration(result.audio_bytes)
-        asset = media_store.save_bytes(asset_id=f"nar-{digest}",
-            relative_path=f"audio/storyboard-v{reference.version}/{digest}.wav",
-            media_type=MediaType.AUDIO, data=result.audio_bytes)
-        duration = measure_wav_duration(media_store.read_bytes(asset))
-        results.append(NarrationAsset(segment_id=segment.segment_id, asset=asset,
-                                      duration_seconds=duration, generation_metadata=metadata))
+        def execute():
+            if recovery is not None and (media_store.root / f"audio/storyboard-v{reference.version}/{digest}.wav").exists():
+                raise ValueError("Unjournaled narration output cannot authorize another dispatch")
+            result = provider.synthesize(text=segment.narration)
+            if not isinstance(result, TTSResult) or result.audio_format != "wav":
+                raise ValueError("TTS provider must return a WAV TTSResult")
+            metadata = GenerationMetadata(provider=result.provider, model=result.model)
+            measure_wav_duration(result.audio_bytes)
+            asset = media_store.save_bytes(asset_id=f"nar-{digest}",
+                relative_path=f"audio/storyboard-v{reference.version}/{digest}.wav",
+                media_type=MediaType.AUDIO, data=result.audio_bytes)
+            duration = measure_wav_duration(media_store.read_bytes(asset))
+            return NarrationAsset(segment_id=segment.segment_id, asset=asset,
+                                  duration_seconds=duration, generation_metadata=metadata)
+
+        def validate(value):
+            if (value.segment_id != segment.segment_id or value.asset.asset_id != f"nar-{digest}"
+                or value.asset.relative_path != f"audio/storyboard-v{reference.version}/{digest}.wav"
+                or value.asset.media_type != MediaType.AUDIO or value.generation_metadata is None):
+                raise ValueError("Recovered narration identity mismatch")
+            if getattr(provider, "model", value.generation_metadata.model) != value.generation_metadata.model:
+                raise ValueError("Recovered narration provider model mismatch")
+            if measure_wav_duration(media_store.read_bytes(value.asset)) != value.duration_seconds:
+                raise ValueError("Recovered narration duration mismatch")
+
+        results.append(execute() if recovery is None else recovery.perform(key=f"narration:{segment.segment_id}",
+            request={"text": segment.narration, "format": "wav"}, result_type=NarrationAsset,
+            execute=execute, validate=validate))
     return tuple(results)
