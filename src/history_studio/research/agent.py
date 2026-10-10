@@ -24,6 +24,7 @@ from .knowledge import KnowledgeRetriever
 from .diagnostics import (
     ArtifactValidationError, ValidationDiagnostic, RequestDiagnostic, diagnostic_lines,
     validation_diagnostic, request_diagnostic,
+    SourceReadDiagnostic, source_read_diagnostic,
 )
 from .usage import LimitReached, UsageLedger
 from history_studio.budget import BudgetExceeded
@@ -48,6 +49,8 @@ class ResearchAgent:
         self.settings = settings
         self.emit = emit or (lambda event: None)
         self.knowledge_retriever = knowledge_retriever
+        # Raw exception/chain retained only in memory for operator debugging.
+        self.last_source_read_exception: Exception | None = None
 
     def run(self, project: ProjectConfig, store: ArtifactStore,
             runtime_configuration: BaseModel | None = None) -> ResearchPackage:
@@ -345,6 +348,14 @@ class ResearchAgent:
             except Exception as exc:
                 if isinstance(exc, CompletionPublicationError):
                     raise
+                if operation == "source_read":
+                    self.last_source_read_exception = exc
+                    try:
+                        self._record_validation(source_read_diagnostic(exc, run_id=ledger.run_id,
+                            iteration=ledger.iterations_started, turn=turn + 1,
+                            pending_request=ledger.pending_request), runtime)
+                    except Exception:
+                        pass  # Diagnostic/reporting failure must not replace normal failure handling.
                 if operation == "model_request":
                     diagnostic = request_diagnostic(exc, run_id=ledger.run_id,
                         iteration=ledger.iterations_started, turn=turn + 1,
@@ -373,11 +384,14 @@ class ResearchAgent:
                 self._summary(package, ledger)
                 return package
 
-    def _record_validation(self, diagnostic: ValidationDiagnostic | RequestDiagnostic, runtime: Path) -> None:
+    def _record_validation(self, diagnostic: ValidationDiagnostic | RequestDiagnostic | SourceReadDiagnostic, runtime: Path) -> None:
         version = ArtifactStore(runtime).save("diagnostics", diagnostic)
         for line in diagnostic_lines(diagnostic):
             self.emit(line)
-        self.emit(f"Research diagnostics: {runtime / 'diagnostics' / f'diagnostics_v{version}.json'}")
+        if isinstance(diagnostic, SourceReadDiagnostic):
+            self.emit(f"Research source-read diagnostics: diagnostics_v{version}.json")
+        else:
+            self.emit(f"Research diagnostics: {runtime / 'diagnostics' / f'diagnostics_v{version}.json'}")
 
     def _merge_sources(self, package: ResearchPackage, result: ToolObservation) -> ToolObservation:
         known = {canonical_url(str(source.url)): source for source in package.sources}

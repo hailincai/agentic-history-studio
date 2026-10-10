@@ -144,7 +144,10 @@ def validation_diagnostic(exc: ValidationError | ArtifactValidationError, *, run
                                 errors=issues, total_errors=total)
 
 
-def diagnostic_lines(diagnostic: ValidationDiagnostic | RequestDiagnostic) -> list[str]:
+def diagnostic_lines(diagnostic: ValidationDiagnostic | RequestDiagnostic | SourceReadDiagnostic) -> list[str]:
+    if isinstance(diagnostic, SourceReadDiagnostic):
+        return [f"Research source-read failure (iteration {diagnostic.iteration}, turn {diagnostic.turn}, "
+                f"{diagnostic.errors[0].error_class}, {diagnostic.errors[0].category}); raw details suppressed"]
     if isinstance(diagnostic, RequestDiagnostic):
         details = ", ".join(f"{key}={value}" for key in
             ("http_status", "provider_type", "provider_code", "provider_param", "response_status", "incomplete_reason")
@@ -198,6 +201,73 @@ class RequestDiagnostic(Contract):
     response_status: str | None = None
     incomplete_reason: str | None = None
     pending_request: bool
+
+
+class SafeTraceLocation(Contract):
+    file: str
+    function: str
+    line: int = Field(ge=0)
+
+
+class SourceReadException(Contract):
+    error_class: str
+    category: Literal["os", "validation", "other"]
+    errno: int | None = None
+    winerror: int | None = None
+    traceback: list[SafeTraceLocation] = Field(default_factory=list)
+
+
+class SourceReadDiagnostic(Contract):
+    run_id: Identifier
+    iteration: int = Field(ge=0)
+    turn: int = Field(ge=1)
+    operation: Literal["source_read"] = "source_read"
+    pending_request: bool
+    errors: list[SourceReadException] = Field(min_length=1, max_length=8)
+
+
+def source_read_diagnostic(exc: Exception, *, run_id: str, iteration: int, turn: int,
+                           pending_request: bool) -> SourceReadDiagnostic:
+    """Bounded chain metadata, without messages, arbitrary names or frame locals.
+
+    Only fixed repository file/function labels are eligible for traceback output.
+    Unknown SDK, test, user and dynamic code locations are explicitly redacted.
+    Path normalization here is lexical; unknown paths are never resolved/read.
+    """
+    import os
+    from pathlib import Path
+
+    research = Path(__file__).resolve().parent
+    allowed = {
+        research / "agent.py": ("research/agent.py", {"_run", "_merge_sources"}),
+        research / "usage.py": ("research/usage.py", {"record", "persist"}),
+        research.parent / "storage/artifact_store.py":
+            ("storage/artifact_store.py", {"write_json", "save", "load"}),
+    }
+    allowed = {os.path.normcase(os.path.normpath(str(path))): value for path, value in allowed.items()}
+    known = (PermissionError, FileNotFoundError, FileExistsError, TimeoutError, OSError,
+             ValidationError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, AssertionError)
+    errors, seen = [], set()
+    current = exc
+    while current is not None and id(current) not in seen and len(errors) < 8:
+        seen.add(id(current))
+        category = "os" if isinstance(current, OSError) else "validation" if isinstance(current, ValidationError) else "other"
+        error_class = next((kind.__name__ for kind in known if isinstance(current, kind)), "Exception")
+        codes = {name: value if type(value) is int else None for name in ("errno", "winerror")
+                 for value in [getattr(current, name, None)]}
+        locations = []
+        trace = current.__traceback__
+        while trace is not None and len(locations) < 32:
+            code = trace.tb_frame.f_code
+            label, functions = allowed.get(os.path.normcase(os.path.normpath(code.co_filename)),
+                                           ("<external>", set()))
+            locations.append(SafeTraceLocation(file=label,
+                function=code.co_name if code.co_name in functions else "<redacted>", line=trace.tb_lineno))
+            trace = trace.tb_next
+        errors.append(SourceReadException(error_class=error_class, category=category, traceback=locations, **codes))
+        current = current.__cause__ or (None if current.__suppress_context__ else current.__context__)
+    return SourceReadDiagnostic(run_id=run_id, iteration=iteration, turn=turn,
+                                pending_request=pending_request, errors=errors)
 
 
 RESPONSE_MESSAGES = {

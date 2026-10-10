@@ -6,6 +6,7 @@ import pytest
 from openai import OpenAI
 
 from history_studio.cli import main
+from history_studio.budget import ProjectBudget, attach_budget
 from history_studio.research.agent import ResearchAgent
 from history_studio.research.diagnostics import RequestDiagnostic, request_diagnostic
 from history_studio.research.openai_provider import OpenAIConfiguration, OpenAIResearchProvider
@@ -30,6 +31,8 @@ SECRET = "sk-secret-authorization-private-reasoning"
 ])
 def test_request_failures_are_diagnosed_without_secrets(tmp_path, capsys, mode, category, code, error_class):
     def handler(request):
+        # The real guard must authorize this request before the fake SDK transport.
+        assert len(budget.snapshot()["outstanding_request_ids"]) == 1
         if mode == "timeout":
             raise httpx.ReadTimeout(SECRET, request=request)
         if mode == "connect":
@@ -48,9 +51,12 @@ def test_request_failures_are_diagnosed_without_secrets(tmp_path, capsys, mode, 
         return httpx.Response(200, json=raw)
 
     project, store = setup_run(tmp_path)
+    budget = ProjectBudget(store.project_dir, stage="research")
+    budget.initialize_new()
     events = []
     with OpenAI(api_key=SECRET, http_client=httpx.Client(transport=httpx.MockTransport(handler)),
                 max_retries=0) as client:
+        attach_budget(client, store.project_dir, "research")
         package = ResearchAgent(OpenAIResearchProvider(client, OpenAIConfiguration()), FakeTools(),
                                 settings(), events.append).run(project, store)
     assert package.progress.stop_reason == "research_model_request_failed"
