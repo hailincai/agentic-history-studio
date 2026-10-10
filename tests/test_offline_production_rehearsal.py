@@ -118,6 +118,10 @@ class ToneTTS:
     def __init__(self):
         self.texts = []
 
+    def recovery_identity(self):
+        return dict(version=1, complete=True, implementation="tone-v1",
+                    settings=dict(model=self.model, rate=48000, frequency=440, amplitude=1500, durations=dict(zip(NARRATION, [22, 23]))))
+
     def synthesize(self, *, text):
         self.texts.append(text)
         seconds = {NARRATION[0]: 22, NARRATION[1]: 23}[text]

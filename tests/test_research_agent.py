@@ -339,6 +339,8 @@ def test_cannot_drop_a_critical_gap_to_complete(tmp_path: Path) -> None:
 def test_unbound_complete_package_requires_explicit_reconciliation(tmp_path: Path) -> None:
     project, store = setup_run(tmp_path)
     package = ResearchAgent(FakeProvider(calls()), FakeTools(), settings()).run(project, store)
+    # Legacy/orphan completion has neither exact binding nor a valid current intent.
+    (store.project_dir / ".runtime/research_completion.json").unlink()
     write_json(store.project_dir / ".runtime/state.json", RuntimeState(current_state=S.RESEARCHING,
         last_successful_state=S.CREATED), replace=True)
     provider = FakeProvider([])

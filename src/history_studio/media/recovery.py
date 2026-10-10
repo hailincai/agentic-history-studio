@@ -1,6 +1,7 @@
 """Exact per-asset execution evidence; never manifest or budget authority."""
 import hashlib
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
@@ -12,6 +13,7 @@ from history_studio.budget import ledger_lock
 from history_studio.models import ArtifactReference
 from history_studio.models.base import Contract, Text
 from history_studio.storage.artifact_store import write_json
+from history_studio.media.openai_provider import OpenAITTSProvider, OpenAIImageProvider, OpenAIVideoProvider
 
 
 def digest(value) -> str:
@@ -61,18 +63,76 @@ class UncertainMediaRequest(ValueError):
     """Operator evidence is required before another dispatch can be authorized."""
 
 
+class CustomProviderIdentity(Contract):
+    """Provider author's complete configuration declaration, not inferred metadata.
+
+    Bump implementation when generation behavior changes. Settings must include
+    every request-affecting option, including defaults and hidden configuration.
+    Credentials, clients, counters and transient failure controls are excluded.
+    """
+    version: Literal[1]
+    complete: Literal[True]
+    implementation: Text
+    settings: dict
+
+
+def configuration_digest(value):
+    """Strict JSON only; never persist configuration values or stringify objects."""
+    def check(item):
+        if type(item) is dict:
+            for key, child in item.items():
+                if type(key) is not str or any(word in key.lower() for word in
+                        ("secret", "password", "credential", "api_key", "authorization", "access_token")):
+                    raise ValueError("Recovery configuration contains invalid or credential keys")
+                check(child)
+        elif type(item) is list:
+            for child in item:
+                check(child)
+        elif item is None or type(item) in (str, bool, int):
+            pass
+        elif type(item) is float and math.isfinite(item):
+            pass
+        else:
+            raise ValueError("Recovery configuration requires deterministic finite JSON values")
+    try:
+        check(value)
+        return digest(value)
+    except (RecursionError, UnicodeError) as error:
+        raise ValueError("Invalid recovery configuration") from error
+
+
 def provider_identity(provider):
     if provider is None:
         return None
     identity = {"class": f"{type(provider).__module__}.{type(provider).__qualname__}"}
+    if type(provider) not in (OpenAITTSProvider, OpenAIImageProvider, OpenAIVideoProvider):
+        declaration = getattr(provider, "recovery_identity", None)
+        if not callable(declaration):
+            raise ValueError("Custom media provider requires a complete recovery_identity declaration")
+        try:
+            raw = declaration()
+            original_hash = configuration_digest(raw)
+            if (type(raw) is not dict or type(raw.get("version")) is not int or
+                    type(raw.get("complete")) is not bool):
+                raise ValueError("Ambiguous declaration types")
+            declared = CustomProviderIdentity.model_validate(raw, strict=True)
+            repeated = declaration()
+            if original_hash != configuration_digest(repeated):
+                raise ValueError("Unstable recovery declaration")
+        except Exception:
+            # Never echo potentially sensitive configuration in diagnostics.
+            raise ValueError("Invalid complete custom provider recovery identity") from None
+        for field in ("model", "voice", "seed", "style", "size", "quality", "seconds"):
+            if hasattr(provider, field) and (field not in declared.settings or
+                    configuration_digest(getattr(provider, field)) != configuration_digest(declared.settings[field])):
+                raise ValueError("Custom provider recovery identity omits or mismatches a generation setting")
+        return dict(identity, custom_identity_version=1,
+                    configuration_sha256=configuration_digest(declared.model_dump()))
     # Known request settings only, never client credentials or mutable counters.
     for field in ("model", "voice", "size", "quality", "seconds", "pricing", "usd_per_million_characters"):
         value = getattr(provider, field, None)
         if value is not None:
             identity[field] = value.model_dump(mode="json") if isinstance(value, Contract) else value
-    data = getattr(provider, "data", None)
-    if isinstance(data, bytes):
-        identity["synthetic_data_sha256"] = hashlib.sha256(data).hexdigest()
     return identity
 
 

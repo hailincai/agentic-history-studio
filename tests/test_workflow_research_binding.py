@@ -150,6 +150,8 @@ def test_failed_artifact_publication_never_creates_binding(tmp_path, monkeypatch
 def test_unbound_completed_checkpoint_cannot_be_guessed_into_legacy_state(tmp_path, workflow_state):
     project, store = setup_run(tmp_path)
     result = ResearchAgent(FakeProvider(calls()), FakeTools(), settings()).run(project, store)
+    # Legacy/orphan fixture: neither exact binding nor current completion intent.
+    (store.project_dir / ".runtime/research_completion.json").unlink()
     write_json(store.project_dir / ".runtime/state.json", RuntimeState(current_state=workflow_state,
         last_successful_state=S.CREATED if workflow_state == S.RESEARCHING else S.RESEARCH_COMPLETE), replace=True)
     provider = FakeProvider([])

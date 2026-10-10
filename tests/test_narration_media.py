@@ -42,6 +42,10 @@ class FakeTTSProvider:
         self.fail_at = fail_at
         self.texts = []
 
+    def recovery_identity(self):
+        return dict(version=1, complete=True, implementation="pcm-v1",
+                    settings={"data_sha256": hashlib.sha256(self.data).hexdigest()})
+
     def synthesize(self, *, text):
         self.texts.append(text)
         if len(self.texts) == self.fail_at:

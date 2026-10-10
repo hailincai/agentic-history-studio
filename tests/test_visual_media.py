@@ -35,6 +35,10 @@ class FakeImageProvider:
         self.fail_at = fail_at
         self.prompts = []
 
+    def recovery_identity(self):
+        return dict(version=1, complete=True, implementation="png-v1",
+                    settings={"data_sha256": hashlib.sha256(self.data).hexdigest()})
+
     def generate(self, *, prompt):
         self.prompts.append(prompt)
         self.events.append(("image", prompt))
@@ -49,6 +53,10 @@ class FakeVideoProvider:
         self.data = mp4_bytes() if data is None else data
         self.fail_at = fail_at
         self.calls = []
+
+    def recovery_identity(self):
+        return dict(version=1, complete=True, implementation="mp4-v1",
+                    settings={"data_sha256": hashlib.sha256(self.data).hexdigest()})
 
     def _generate(self, kind, prompt, image=None):
         self.calls.append((kind, prompt, image))

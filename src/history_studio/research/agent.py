@@ -1,4 +1,5 @@
 import json
+import hashlib
 from collections.abc import Callable
 from pathlib import Path
 from uuid import uuid4
@@ -28,6 +29,8 @@ from .usage import LimitReached, UsageLedger
 from history_studio.budget import BudgetExceeded
 from .evidence_diagnostics import evidence_mismatch
 from .web_tools import canonical_url, normalize_text, source_reference
+from .completion import (CompletionIntent, CompletionPublicationError, digest,
+                         diagnostic, read_model, read_bytes, publish_intent)
 
 
 class ResearchAgent:
@@ -65,6 +68,7 @@ class ResearchAgent:
 
     def _load_package(self, project: ProjectConfig, store: ArtifactStore) -> ResearchPackage | None:
         versions = store.list_versions("research")
+        latest = None
         for version in reversed(versions):
             try:
                 package = store.load("research", version, ResearchPackage)
@@ -74,7 +78,14 @@ class ResearchAgent:
             if (package.project_id != project.project_id or package.topic != project.topic
                     or package.research_scope != project.research_scope):
                 raise ValueError("Research checkpoint belongs to a different project/topic/scope")
-            return package
+            if package.progress.status == ResearchRunStatus.COMPLETE:
+                # Discovery is a barrier, never completion authority. Even a newer
+                # FAILED checkpoint cannot hide an uncommitted COMPLETE artifact.
+                raise ValueError("Exact completed research snapshot binding is missing; explicit reconciliation required")
+            if latest is None:
+                latest = package
+        if latest is not None:
+            return latest
         if versions:
             raise ValueError("No valid research checkpoint; refusing to discard prior work")
         return None
@@ -83,11 +94,20 @@ class ResearchAgent:
         if store.project_dir.name != project.project_id:
             raise ValueError("Project ID must match the artifact directory")
         state_path = runtime / "state.json"
-        machine = ProjectStateMachine(RuntimeState.model_validate_json(state_path.read_text(encoding="utf-8")))
+        intent_path = runtime / "research_completion.json"
+        has_intent = intent_path.exists() or intent_path.is_symlink()
+        try:
+            machine = ProjectStateMachine(read_model(state_path, RuntimeState))
+        except Exception as exc:
+            if has_intent:
+                self._completion_error(runtime, "completion_authentication", exc)
+            raise
         if machine.resume_state not in (ProjectState.CREATED, ProjectState.RESEARCHING, ProjectState.RESEARCH_COMPLETE):
             raise ValueError("Research cannot run from the current workflow stage")
         reference = None
         machine.state.artifacts.validate_project(project.project_id)
+        if has_intent:
+            return self._recover_completion(project, store, machine, runtime)
         if machine.state.artifacts.research is not None:
             reference = machine.state.require_research_input_ref(project.project_id)
             package = store.load("research", reference.version, ResearchPackage)
@@ -254,7 +274,10 @@ class ResearchAgent:
                                 raise LimitReached("no_progress_limit")
                             continue
                         operation = "artifact_persistence"
-                        checkpoint_ref = self._checkpoint(candidate, store)
+                        if candidate.progress.status == ResearchRunStatus.COMPLETE:
+                            return self._publish_completion(project, store, machine, runtime,
+                                                            candidate, ledger, marks, signals, coverage)
+                        self._checkpoint(candidate, store)
                         ledger.progress_seen = sorted(set(ledger.progress_seen) | marks)
                         ledger.consecutive_no_progress = 0
                         ledger.last_checkpoint_outcome = {"status": "checkpoint_accepted", "progress": signals,
@@ -262,12 +285,6 @@ class ResearchAgent:
                         ledger.persist(usage_path)
                         package = candidate
                         observation = None
-                        if package.progress.status == ResearchRunStatus.COMPLETE:
-                            operation = "workflow_transition"
-                            self._finish_workflow(machine, state_path,
-                                research_input_ref=checkpoint_ref, project_id=project.project_id)
-                            self._summary(package, ledger)
-                            return package
                         break
                     if call.name == "search_web":
                         request = SearchRequest.model_validate(call.arguments)
@@ -326,6 +343,8 @@ class ResearchAgent:
                 self._summary(package, ledger)
                 return package
             except Exception as exc:
+                if isinstance(exc, CompletionPublicationError):
+                    raise
                 if operation == "model_request":
                     diagnostic = request_diagnostic(exc, run_id=ledger.run_id,
                         iteration=ledger.iterations_started, turn=turn + 1,
@@ -417,8 +436,106 @@ class ResearchAgent:
         if package.project_id != store.project_dir.name:
             raise ValueError("Research checkpoint project must match artifact directory")
         version = store.save("research", package)
-        self.emit(f"Checkpoint research_v{version}: {len(package.facts)} facts, {len(package.sources)} sources")
+        # COMPLETE must acquire durable intent before any reporting callback.
+        if package.progress.status != ResearchRunStatus.COMPLETE:
+            self.emit(f"Checkpoint research_v{version}: {len(package.facts)} facts, {len(package.sources)} sources")
         return ArtifactReference(project_id=package.project_id, artifact_type="research", version=version)
+
+    def _completion_error(self, runtime, operation, exception):
+        try:
+            ArtifactStore(runtime).save("diagnostics", diagnostic(operation, exception))
+        except Exception:
+            pass  # Diagnostic storage failure must not replace the original cause.
+        raise CompletionPublicationError(operation) from exception
+
+    def _publish_completion(self, project, store, machine, runtime, candidate, ledger, marks, signals, coverage):
+        before = UsageLedger.model_validate(ledger.model_dump())
+        after = UsageLedger.model_validate(ledger.model_dump() | {
+            "progress_seen": sorted(set(ledger.progress_seen) | marks), "consecutive_no_progress": 0,
+            "last_checkpoint_outcome": {"status": "checkpoint_accepted", "progress": signals, "coverage": coverage}})
+        # Before successful publication, existing generation failure handling applies.
+        reference = self._checkpoint(candidate, store)
+        try:
+            completed = ProjectStateMachine(RuntimeState.model_validate(machine.state.model_dump(mode="json")))
+            completed.complete_research(reference, project_id=project.project_id)
+            path = store.project_dir / "research" / f"research_v{reference.version}.json"
+            candidate_bytes = read_bytes(path)
+            if ResearchPackage.model_validate_json(candidate_bytes) != candidate:
+                raise ValueError("Published Research candidate differs from accepted completion")
+            data = dict(project_id=project.project_id, run_id=ledger.run_id, candidate_ref=reference,
+                candidate_sha256=hashlib.sha256(candidate_bytes).hexdigest(),
+                sources_sha256=digest([source.model_dump(mode="json") for source in candidate.sources]),
+                project_sha256=digest(project.model_dump(mode="json")),
+                settings_sha256=digest(self.settings.model_dump(mode="json")),
+                state_before=machine.state, state_after=completed.state, ledger_before=before, ledger_after=after)
+            intent = CompletionIntent(**data, commit_sha256=digest({key: value.model_dump(mode="json")
+                if isinstance(value, BaseModel) else value for key, value in data.items()} | {"version": 1}))
+            publish_intent(runtime / "research_completion.json", intent)
+        except Exception as exc:
+            self._completion_error(runtime, "intent_publication", exc)
+        return self._recover_completion(project, store, machine, runtime)
+
+    def _recover_completion(self, project, store, machine, runtime):
+        operation = "completion_authentication"
+        try:
+            intent = read_model(runtime / "research_completion.json", CompletionIntent)
+            intent.verify_commit()
+            reference = intent.candidate_ref
+            if (intent.project_id != project.project_id or reference.project_id != project.project_id
+                    or reference.artifact_type != "research"
+                    or intent.project_sha256 != digest(project.model_dump(mode="json"))
+                    or intent.settings_sha256 != digest(self.settings.model_dump(mode="json"))):
+                raise ValueError("Research completion project/configuration identity differs")
+            path = store.project_dir / "research" / f"research_v{reference.version}.json"
+            candidate_bytes = read_bytes(path)
+            candidate = ResearchPackage.model_validate_json(candidate_bytes)
+            if (hashlib.sha256(candidate_bytes).hexdigest() != intent.candidate_sha256
+                    or candidate.project_id != project.project_id or candidate.topic != project.topic
+                    or candidate.research_scope != project.research_scope
+                    or candidate.progress.status != ResearchRunStatus.COMPLETE
+                    or candidate.progress.run_id != intent.run_id
+                    or digest([source.model_dump(mode="json") for source in candidate.sources]) != intent.sources_sha256):
+                raise ValueError("Exact Research completion candidate differs")
+            self._check_completion(candidate)
+            if (intent.state_before.current_state != ProjectState.RESEARCHING
+                    or intent.state_before.artifacts.research is not None):
+                raise ValueError("Research completion intent requires an unbound active generation")
+            expected = RuntimeState(current_state=ProjectState.RESEARCH_COMPLETE,
+                last_successful_state=ProjectState.RESEARCH_COMPLETE,
+                artifacts=intent.state_before.artifacts.with_research(reference))
+            if expected != intent.state_after:
+                raise ValueError("Research completion state identity differs")
+            current = machine.state
+            if current.artifacts.research is not None and current.artifacts.research != reference:
+                raise ValueError("Research completion cannot replace an existing exact binding")
+            if current.current_state == ProjectState.FAILED:
+                current = ProjectStateMachine(current).recover()
+            if current not in (intent.state_before, intent.state_after):
+                raise ValueError("Research completion conflicts with exact workflow authority")
+            usage_path = runtime / "research_usage.json"
+            persisted = read_model(usage_path, UsageLedger)
+            if (persisted not in (intent.ledger_before, intent.ledger_after)
+                    or intent.ledger_before.run_id != intent.run_id or intent.ledger_after.run_id != intent.run_id
+                    or intent.ledger_before.pending_request or intent.ledger_after.pending_request
+                    or candidate.progress.iterations != intent.ledger_before.iterations_started):
+                raise ValueError("Research completion usage evidence differs")
+            # Completion may change progress only, never accounting or reservations.
+            progress_fields = {"progress_seen", "consecutive_no_progress", "last_checkpoint_outcome"}
+            if (intent.ledger_before.model_dump(exclude=progress_fields) !=
+                    intent.ledger_after.model_dump(exclude=progress_fields)):
+                raise ValueError("Research completion cannot alter consumed usage")
+            operation = "completion_ledger"
+            if persisted != intent.ledger_after:
+                intent.ledger_after.persist(usage_path)
+            operation = "completion_state"
+            if machine.state != intent.state_after:
+                self._finish_workflow(machine, runtime / "state.json",
+                                      research_input_ref=reference, project_id=project.project_id)
+            operation = "completion_reporting"
+            self._summary(candidate, intent.ledger_after)
+            return candidate
+        except Exception as exc:
+            self._completion_error(runtime, operation, exc)
 
     def _finish_workflow(self, machine: ProjectStateMachine, path: Path, *,
                          research_input_ref: ArtifactReference, project_id: str) -> None:

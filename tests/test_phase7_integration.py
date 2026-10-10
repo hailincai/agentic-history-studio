@@ -88,6 +88,10 @@ class FakeTTS:
         self.fail_at = fail_at
         self.texts = []
 
+    def recovery_identity(self):
+        return dict(version=1, complete=True, implementation="phase7-pcm-v1",
+                    settings={})
+
     def synthesize(self, *, text):
         self.texts.append(text)
         if len(self.texts) == self.fail_at:
@@ -99,6 +103,10 @@ class FakeImage:
     def __init__(self):
         self.prompts = []
 
+    def recovery_identity(self):
+        return dict(version=1, complete=True, implementation="phase7-png-v1",
+                    settings={})
+
     def generate(self, *, prompt):
         self.prompts.append(prompt)
         return ImageGenerationResult(image_bytes=png_payload(prompt), provider="fake-image", model="phase7-png")
@@ -109,6 +117,10 @@ class FakeVideo:
         self.media_root = media_root
         self.text_prompts = []
         self.image_calls = []
+
+    def recovery_identity(self):
+        return dict(version=1, complete=True, implementation="phase7-mp4-v1",
+                    settings={})
 
     def generate_from_text(self, *, prompt):
         self.text_prompts.append(prompt)

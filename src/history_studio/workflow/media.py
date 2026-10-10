@@ -7,7 +7,7 @@ from history_studio.media.image import ImageProvider
 from history_studio.media.tts import TTSProvider
 from history_studio.media.video import VideoProvider
 from history_studio.media.validation import MediaIntegrityReport, validate_media_package
-from history_studio.media.recovery import AssetRecovery, RecoveryScope, provider_identity
+from history_studio.media.recovery import AssetRecovery, RecoveryScope, provider_identity, configuration_digest
 import hashlib
 from history_studio.budget import ledger_lock
 from history_studio.models import ArtifactReference, GenerationMethod, MediaPackage, ProjectConfig, ScriptPackage, StoryboardPackage
@@ -24,8 +24,8 @@ class MediaProviders:
     tts: TTSProvider
     image: ImageProvider | None = None
     video: VideoProvider | None = None
-    # Custom providers must declare any request settings not exposed by the
-    # standard adapters here; mutable call counters are never configuration.
+    # Supplementary scope configuration; never substitutes for each custom
+    # provider's complete recovery_identity() declaration. Persisted as a digest.
     recovery_identity: dict | None = None
 
 
@@ -126,7 +126,9 @@ class MediaWorkflow:
             if methods & {GenerationMethod.TEXT_TO_VIDEO, GenerationMethod.IMAGE_TO_VIDEO} and providers.video is None:
                 raise ValueError("Approved Storyboard requires a video provider before narration execution")
             identities = dict(tts=provider_identity(providers.tts), image=provider_identity(providers.image),
-                              video=provider_identity(providers.video), explicit=providers.recovery_identity)
+                              video=provider_identity(providers.video),
+                              explicit=(configuration_digest(providers.recovery_identity)
+                                        if providers.recovery_identity is not None else None))
             config_path = store.project_dir / ".runtime/media_config.json"
             if config_path.exists():
                 identities["media_config_sha256"] = hashlib.sha256(config_path.read_bytes()).hexdigest()
