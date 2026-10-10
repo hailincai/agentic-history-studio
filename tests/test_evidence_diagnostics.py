@@ -95,6 +95,7 @@ def test_diagnostic_feedback_keeps_read_context_for_correction(tmp_path):
 def test_mocked_sdk_checkpoint_arguments_reach_validator_unchanged(tmp_path, monkeypatch, escape_unicode):
     import httpx
     from openai import OpenAI
+    from history_studio.budget import ProjectBudget, attach_budget
     from history_studio.research.openai_provider import OpenAIResearchProvider, OpenAIConfiguration
     from test_openai_provider import response
 
@@ -107,6 +108,8 @@ def test_mocked_sdk_checkpoint_arguments_reach_validator_unchanged(tmp_path, mon
     project, store = setup_run(tmp_path)
     # Retrieval is lexical: align the pre-plan scope with this Chinese transport fixture.
     project.research_scope = "出生與遷居"
+    budget = ProjectBudget(store.project_dir, stage="research")
+    budget.initialize_new()
 
     class PageTools(FakeTools):
         def read_source(self, source, max_chars):
@@ -115,6 +118,7 @@ def test_mocked_sdk_checkpoint_arguments_reach_validator_unchanged(tmp_path, mon
             return result
 
     def handler(request):
+        assert len(budget.snapshot()["outstanding_request_ids"]) == 1
         requests.append(json.loads(request.content))
         arguments = update().arguments
         arguments["facts"][0]["evidence"] = [{"source_id": SOURCE.source_id,
@@ -133,6 +137,7 @@ def test_mocked_sdk_checkpoint_arguments_reach_validator_unchanged(tmp_path, mon
 
     with OpenAI(api_key="offline-test-key", max_retries=0,
                 http_client=httpx.Client(transport=httpx.MockTransport(handler))) as client:
+        attach_budget(client, store.project_dir, "research")
         sdk = OpenAIResearchProvider(client, OpenAIConfiguration())
         initial = FakeProvider(calls()[:2])
         class RoutedProvider:

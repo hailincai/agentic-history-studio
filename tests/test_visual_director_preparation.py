@@ -80,6 +80,7 @@ def test_allowed_metadata_matches_contract_enums():
 
 def test_no_execution_or_enrichment(monkeypatch):
     from openai.resources.responses import Responses
+    from history_studio.models import ProductionBrief, ProjectConfig
     from history_studio.storage.artifact_store import ArtifactStore
 
     def forbidden(*args, **kwargs):
@@ -88,9 +89,20 @@ def test_no_execution_or_enrichment(monkeypatch):
     monkeypatch.setattr(Responses, "create", forbidden)
     for method in ("load", "load_latest", "list_versions", "save"):
         monkeypatch.setattr(ArtifactStore, method, forbidden)
-    director = VisualDirector(context())
+    project = ProjectConfig(project_id="project", topic="李白", language="zh-CN",
+                            target_duration_minutes=0.75,
+                            allowed_generation_methods=[GenerationMethod.STATIC_IMAGE])
+    source = context()
+    source.production_brief = ProductionBrief.from_project(project)
+    director = VisualDirector(source)
     data = decode(director.prepare())
-    assert set(data) == {"script_input_ref", "title", "sections"}
+    assert set(data) == {"script_input_ref", "title", "sections", "production_brief"}
+    assert data["production_brief"] == {
+        "topic": project.topic,
+        "language": project.language,
+        "target_duration_seconds": project.target_duration_minutes * 60,
+        "allowed_generation_methods": [method.value for method in project.allowed_generation_methods],
+    }
     for section in data["sections"]:
         assert set(section) == {"section_id", "title", "segments"}
         for segment in section["segments"]:
