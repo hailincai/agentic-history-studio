@@ -72,6 +72,7 @@ def test_native_schemas_are_strict_and_exclude_legacy_embedded_sources() -> None
 
 
 def test_hosted_search_is_bounded_and_only_exposes_real_source_urls() -> None:
+    from history_studio.budget import UnsupportedPrice
     requests = []
     def handler(request):
         requests.append(json.loads(request.content))
@@ -90,7 +91,9 @@ def test_hosted_search_is_bounded_and_only_exposes_real_source_urls() -> None:
         assert result.text == ""
         assert result.sources[0].title == "Source title"
         assert result.usage.estimated_tool_cost_usd == 0.01
-        assert tools.search_reserve_cost("chosen query") >= result.usage.estimated_model_cost_usd + 0.01
+        # Parsing remains transport-only; it does not authorize a paid search.
+        with pytest.raises(UnsupportedPrice, match="billing semantics"):
+            tools.search_reserve_cost("chosen query")
     finally:
         client.close()
     assert requests[0]["max_tool_calls"] == 1
@@ -144,23 +147,24 @@ def test_alternate_model_cannot_accidentally_inherit_default_rates() -> None:
         OpenAIConfiguration(model="different-model", pricing_model="different-model")
 
 
-@pytest.mark.parametrize("query, expected_usd", [("x", 0.016444), ("李白", 0.016446)])
-def test_search_reservation_counts_one_fixed_block(query: str, expected_usd: float, monkeypatch) -> None:
+@pytest.mark.parametrize("query", ["x", "李白"])
+def test_search_reservation_rejects_unverified_fixed_block(query: str, monkeypatch) -> None:
+    from history_studio.budget import UnsupportedPrice
     tools = OpenAIWebTools(SimpleNamespace(), OpenAIConfiguration())
     monkeypatch.setattr(tools, "_request", lambda query: {"input": query})
-    # 14 / 19 UTF-8 request bytes + 4096 framing + one 8000-token block,
-    # at $0.40/M input; 1000 max output tokens at $1.60/M; one $0.01 tool fee.
-    assert tools.search_reserve_cost(query) == pytest.approx(expected_usd)
+    with pytest.raises(UnsupportedPrice, match="hard input bound"):
+        tools.search_reserve_cost(query)
 
 
 def test_search_reservation_preserves_configured_cost_components(monkeypatch) -> None:
+    from history_studio.budget import UnsupportedPrice
     config = OpenAIConfiguration(request_overhead_tokens=8192, search_output_tokens=2000,
         search_input_usd_per_million=2, search_output_usd_per_million=7, search_call_usd=0.03)
     tools = OpenAIWebTools(SimpleNamespace(), config)
     monkeypatch.setattr(tools, "_request", lambda query: {"input": query})
-    # 14 bytes + 8192 framing + 8000 search tokens at $2/M, 2000 output at $7/M,
-    # and the configured $0.03 fee. No network or usage response is required.
-    assert tools.search_reserve_cost("x") == pytest.approx(0.076412)
+    # Explicit prices and larger framing do not establish provider billing semantics.
+    with pytest.raises(UnsupportedPrice, match="billing semantics"):
+        tools.search_reserve_cost("x")
 
 
 def assert_historical_time_guidance(parameters: dict) -> None:

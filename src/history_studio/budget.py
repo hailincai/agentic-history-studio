@@ -6,6 +6,7 @@ Only explicit operator reconciliation can release uncertain reservations. Resear
 run ledgers are diagnostic/narrower limits and are not debited here a second time.
 """
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from decimal import Decimal
 import hashlib
@@ -28,7 +29,20 @@ class BudgetError(ValueError):
 
 
 class BudgetExceeded(BudgetError):
-    pass
+    settlement = None
+
+
+_research_accounting = ContextVar("research_accounting", default=None)
+
+
+@contextmanager
+def research_accounting(identity):
+    """Correlate one durable Research reservation, without changing budget authority."""
+    token = _research_accounting.set(identity)
+    try:
+        yield
+    finally:
+        _research_accounting.reset(token)
 
 
 class UnsupportedPrice(BudgetError):
@@ -233,6 +247,9 @@ class ProjectBudget:
             outstanding = sum((event.amount_usd for event in pending.values()), Decimal(0))
             if committed + outstanding + maximum > usd(project.budget_usd):
                 raise BudgetExceeded("Project budget exhausted; provider request blocked")
+            basis = dict(basis)
+            if self.stage == "research" and _research_accounting.get() is not None:
+                basis["research_accounting_id"] = _research_accounting.get()
             ledger.events.append(BudgetEvent(action="reserve", request_id=request_id, amount_usd=maximum,
                 stage=self.stage, operation=operation, model=model, request_sha256=request_sha256,
                 basis=basis, at=datetime.now(timezone.utc)))
@@ -261,7 +278,26 @@ class ProjectBudget:
                 request_sha256=reservation.request_sha256, basis=basis, at=datetime.now(timezone.utc)))
             write_json(self.path, ledger, replace=True)
             if amount > reservation.amount_usd:
-                raise BudgetExceeded("Reported cost exceeded reservation; recorded overrun, further calls remain capped")
+                exc = BudgetExceeded("Reported cost exceeded reservation; recorded overrun, further calls remain capped")
+                exc.settlement = ledger.events[-1].model_copy(deep=True)
+                raise exc
+
+    def research_settlement(self, identity):
+        """Read only an exact correlated settlement; legacy history has no inferred match."""
+        with ledger_lock(self.lock_path):
+            ledger = self._load(self._project())
+            _, _, closed = fold(ledger)
+            reservations = [event for event in ledger.events if event.action == "reserve"
+                            and event.stage == "research"
+                            and event.basis.get("research_accounting_id") == identity]
+            if len(reservations) > 1:
+                raise BudgetError("Ambiguous Research accounting identity")
+            if not reservations:
+                return None
+            event = closed.get(reservations[0].request_id)
+            if event is None or event.action != "settle":
+                return None
+            return event.model_copy(deep=True)
 
     def _execute(self, operation, model, request, maximum, basis, call, authenticate):
         identity = uuid4().hex
@@ -283,18 +319,15 @@ class ProjectBudget:
         if type(output_cap) is not int or output_cap <= 0:
             raise UnsupportedPrice("Responses requires an explicit output token cap")
         search = search_content_tokens != 0
+        if search or search_call_usd != 0 or any(tool.get("type") == "web_search" for tool in request.get("tools", [])):
+            raise UnsupportedPrice("Hosted search blocked: reported search-content billing semantics and hard input bound are unverified")
         value = request.get("input")
         if not isinstance(value, str) and not (isinstance(value, list) and all(
                 isinstance(item, dict) and (isinstance(item.get("content"), str)
                     or item.get("type") in ("function_call", "function_call_output")) for item in value)):
             raise UnsupportedPrice("Only text/function-call Responses input has a supported token bound")
         tool_types = [tool.get("type") for tool in request.get("tools", [])]
-        if search:
-            if (request.get("model") != "gpt-4.1-mini" or tool_types != ["web_search"]
-                    or request.get("max_tool_calls") != 1 or type(search_content_tokens) is not int
-                    or search_content_tokens < 8000 or usd(search_call_usd) <= 0):
-                raise UnsupportedPrice("Only the bounded one-call fixed-block hosted search rule is supported")
-        elif any(kind != "function" for kind in tool_types):
+        if any(kind != "function" for kind in tool_types):
             raise UnsupportedPrice("Unpriced hosted tools are disabled for paid Responses")
         input_bound = len(json.dumps(request, ensure_ascii=False).encode("utf-8")) + overhead_tokens + search_content_tokens
         maximum = (input_bound * rates[0] + output_cap * rates[1]) / Decimal(1000000) + usd(search_call_usd)

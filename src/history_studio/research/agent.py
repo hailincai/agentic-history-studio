@@ -27,7 +27,7 @@ from .diagnostics import (
     SourceReadDiagnostic, source_read_diagnostic,
 )
 from .usage import LimitReached, UsageLedger
-from history_studio.budget import BudgetExceeded
+from history_studio.budget import BudgetExceeded, research_accounting
 from .evidence_diagnostics import evidence_mismatch
 from .web_tools import canonical_url, normalize_text, source_reference
 from .completion import (CompletionIntent, CompletionPublicationError, digest,
@@ -138,9 +138,21 @@ class ResearchAgent:
                   if usage_path.exists() else UsageLedger(run_id=uuid4().hex))
         if package and ledger.run_id != package.progress.run_id:
             raise ValueError("Checkpoint and usage ledger run IDs do not match")
+        ledger.recover_settlement(store.project_dir, usage_path)
+        if ledger.accounting_recovery_stop:
+            if machine.state.current_state == ProjectState.FAILED:
+                machine.recover()
+                write_json(state_path, machine.state, replace=True)
+            package.progress.status = ResearchRunStatus.LIMIT_REACHED
+            if package.progress.stop_reason != "authenticated_accounting_handoff_recovered":
+                package.progress.stop_reason = "authenticated_accounting_handoff_recovered"
+                self._checkpoint(package, store)
+            self._summary(package, ledger)
+            return package
         if ledger.pending_request:
             ledger.unknown_usage = True
             ledger.pending_request = False
+            ledger.pending_accounting_id = None
         ledger.persist(usage_path)
         if package is None:
             package = ResearchPackage(project_id=project.project_id, topic=project.topic,
@@ -208,7 +220,8 @@ class ResearchAgent:
                     quote = self.provider.reserve_cost(context, observation, self.settings.max_output_tokens)
                     ledger.reserve(quote, hard_budget, "model", usage_path)
                     operation = "model_request"
-                    reply = self.provider.decide(context, observation, self.settings.max_output_tokens)
+                    with research_accounting(ledger.pending_accounting_id):
+                        reply = self.provider.decide(context, observation, self.settings.max_output_tokens)
                     ledger.record(reply.usage, usage_path)
                     call = reply.call
                     if call.name not in action_contracts():
@@ -296,7 +309,8 @@ class ResearchAgent:
                         ledger.reserve(self.tools.search_reserve_cost(request.query), hard_budget, "search", usage_path)
                         self.emit(f"Tool: search_web query={request.query}")
                         operation = "web_search"
-                        result = self.tools.search_web(request.query)
+                        with research_accounting(ledger.pending_accounting_id):
+                            result = self.tools.search_web(request.query)
                     else:
                         request = ReadRequest.model_validate(call.arguments)
                         source = next((s for s in package.sources if s.source_id == request.source_id), None)
@@ -338,6 +352,8 @@ class ResearchAgent:
                 else:
                     raise LimitReached("turn_limit")
             except (LimitReached, ContextLimitError, BudgetExceeded) as exc:
+                if isinstance(exc, BudgetExceeded):
+                    ledger.recover_settlement(store.project_dir, usage_path)
                 package.progress = ResearchProgress(run_id=ledger.run_id, iterations=ledger.iterations_started,
                     status=ResearchRunStatus.LIMIT_REACHED, stop_reason=str(exc))
                 self._checkpoint(package, store)

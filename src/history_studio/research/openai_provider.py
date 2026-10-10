@@ -210,12 +210,7 @@ class OpenAIWebTools:
                     max_output_tokens=self.config.search_output_tokens, store=False)
 
     def search_reserve_cost(self, query: str) -> float:
-        # One fixed search-content block per call; request bytes/framing remain conservative.
-        input_bound = (len(json.dumps(self._request(query), ensure_ascii=False).encode("utf-8"))
-                       + self.config.request_overhead_tokens + self.config.search_content_tokens)
-        return ((input_bound * self.config.search_input_usd_per_million
-                 + self.config.search_output_tokens * self.config.search_output_usd_per_million)
-                / 1_000_000 + self.config.search_call_usd)
+        raise budget.UnsupportedPrice("Hosted search blocked: reported search-content billing semantics and hard input bound are unverified")
 
     def search_web(self, query: str) -> ToolObservation:
         body = self._request(query)

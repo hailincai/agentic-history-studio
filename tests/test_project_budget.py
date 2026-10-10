@@ -165,17 +165,15 @@ def test_research_shared_guard_has_no_duplicate_project_debit(tmp_path):
     assert budget.path.read_bytes() == before
 
 
-def test_hosted_search_reserves_single_tool_and_fixed_block(tmp_path):
+def test_hosted_search_blocks_unverified_fixed_block_before_dispatch(tmp_path):
     root, budget = setup(tmp_path)
     def handler(req):
-        assert ledger(budget).events[-1].operation == "hosted_search"
-        raw = response([dict(type="web_search_call", id="ws", status="completed", action=dict(type="search", query="q", sources=[]))])
-        return httpx.Response(200, json=raw)
+        pytest.fail("Unverified hosted search must not dispatch")
     with OpenAI(api_key="offline", max_retries=0, http_client=httpx.Client(transport=httpx.MockTransport(handler))) as client:
         attach_budget(client, root, "verify")
-        OpenAIWebTools(client, OpenAIConfiguration()).search_web("q")
-    assert budget.snapshot()["committed_usd"] == Decimal("0.013236")
-    assert ledger(budget).events[-1].basis["pricing"]["search_content_tokens"] == 8000
+        with pytest.raises(UnsupportedPrice, match="billing semantics"):
+            OpenAIWebTools(client, OpenAIConfiguration()).search_web("q")
+    assert len(ledger(budget).events) == 1
 
 
 @pytest.mark.parametrize("operation", ["tts_unknown", "tts_token_model", "image", "video_text", "video_image"])
